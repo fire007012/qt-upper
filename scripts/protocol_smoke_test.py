@@ -8,7 +8,7 @@ import time
 
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-SERVER = os.path.join(ROOT, "scripts", "mock_ros1_server.py")
+SERVER = os.path.join(ROOT, "scripts", "mock_robot_server.py")
 HOST = "127.0.0.1"
 PORT = int(os.getenv("PROTOCOL_SMOKE_PORT", "19090"))
 

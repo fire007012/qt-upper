@@ -8,6 +8,7 @@
 #include <QVariant>
 #include <QVBoxLayout>
 #include <QDebug>
+#include <QLabel>
 
 RobotAttitudeWidget::RobotAttitudeWidget(QWidget *parent)
     : QWidget(parent)
@@ -16,7 +17,10 @@ RobotAttitudeWidget::RobotAttitudeWidget(QWidget *parent)
 {
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
+    m_freshnessLabel = new QLabel(this);
+    layout->addWidget(m_freshnessLabel);
     layout->addWidget(m_robotView);
+    setDataFresh(false);
 
     m_robotView->setResizeMode(QQuickWidget::SizeRootObjectToView);
 
@@ -46,6 +50,12 @@ RobotAttitudeWidget::RobotAttitudeWidget(QWidget *parent)
 void RobotAttitudeWidget::updateAttitude(double roll, double pitch, double yaw)
 {
     m_viewModel->updateAttitude(roll, pitch, yaw);
+}
+
+void RobotAttitudeWidget::setDataFresh(bool fresh)
+{
+    m_freshnessLabel->setText(fresh ? QStringLiteral("姿态：实时观测") : QStringLiteral("姿态：未知/过期，图形仅保留最后观测"));
+    m_freshnessLabel->setStyleSheet(fresh ? QStringLiteral("color: #16a34a;") : QStringLiteral("color: #d97706;"));
 }
 
 void RobotAttitudeWidget::updateLegs(double leg1, double leg2, double leg3, double leg4)

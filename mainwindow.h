@@ -6,6 +6,8 @@
 #include <QDateTime>
 #include <QLabel>
 #include <QStringList>
+#include <QElapsedTimer>
+#include <QHash>
 #include "src/communication/SharedStructs.h"
 
 #include "src/controller/controller.h"
@@ -143,6 +145,16 @@ private:
     QListWidget* m_armActionList = nullptr;
     QPushButton* m_executeArmActionButton = nullptr;
     QPushButton* m_refreshArmActionButton = nullptr;
+    QPushButton* m_operatorControlButton = nullptr;
+    QPushButton* m_operationsControlButton = nullptr;
+    QLabel* m_controlPermissionLabel = nullptr;
+    bool m_operationsAuthorized = false;
+    QElapsedTimer m_emergencyDebounce;
+    QHash<QString, QString> m_operationSummaries;
+    QString m_lastControlNotice;
+    QLabel* m_connectionPhaseLabel = nullptr;
+    bool m_operatorControlEnabled = false;
+    QString m_lastOperatorInputStatus;
 
     // 手柄输入驱动
     HandleKey* m_handleKey;

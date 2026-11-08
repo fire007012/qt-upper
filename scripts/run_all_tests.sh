@@ -1,107 +1,41 @@
 #!/usr/bin/env bash
+# Current host-side checks only. ROS2/hardware acceptance is a separate workflow.
 set -euo pipefail
-
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-LOG_DIR="$ROOT/test-logs"
+CMAKE_BIN="${CMAKE_BIN:-cmake}"
+CTEST_BIN="${CTEST_BIN:-$(dirname "$(command -v "$CMAKE_BIN")")/ctest}"
+BUILD_DIR="${BUILD_DIR:-/tmp/hostcomputer-build-smoke}"
+COMMUNICATION_BUILD_DIR="${COMMUNICATION_BUILD_DIR:-/tmp/hostcomputer-communication-tests}"
+LOG_DIR="${LOG_DIR:-/tmp/hostcomputer-test-logs}"
+BUILD_JOBS="${BUILD_JOBS:-4}"
+HOST_BUILD_WIDGET_TESTS="${HOST_BUILD_WIDGET_TESTS:-OFF}"
+REFERENCE_DIR="$(realpath -m "$ROOT/ros2_ws_car")"
+for output_dir in "$BUILD_DIR" "$COMMUNICATION_BUILD_DIR" "$LOG_DIR"; do
+    resolved_dir="$(realpath -m "$output_dir")"
+    case "$resolved_dir" in
+        "$REFERENCE_DIR"|"$REFERENCE_DIR"/*|"$ROOT"|"$ROOT/archive"|"$ROOT/archive"/*)
+            echo "拒绝将构建、日志或缓存写入源码根目录、只读参考目录或历史归档: $output_dir" >&2
+            exit 1 ;;
+    esac
+done
 mkdir -p "$LOG_DIR"
-TS="$(date +%Y%m%d_%H%M%S)"
-REPORT="$LOG_DIR/run_all_${TS}.txt"
-RESTART_ROUNDS="${RESTART_ROUNDS:-10}"
-FUZZ_SEC="${FUZZ_SEC:-12}"
-STRESS_SEC="${STRESS_SEC:-600}"
-BUILD_DIR="${BUILD_DIR:-$ROOT/build-smoke}"
-BIN="${BIN:-$BUILD_DIR/hostcomputer}"
-RUN_RUNTIME_TESTS="${RUN_RUNTIME_TESTS:-0}"
-
+REPORT="$LOG_DIR/run_all_$(date +%Y%m%d_%H%M%S).txt"
 log() { echo "[$(date +%H:%M:%S)] $*" | tee -a "$REPORT"; }
 
-log "A1) smoke test"
-BUILD_DIR="$BUILD_DIR" "$ROOT/scripts/smoke_test.sh" | tee -a "$REPORT"
+log "1) Qt application build (optional process smoke via RUN_APP_SMOKE=1)"
+CMAKE_BIN="$CMAKE_BIN" BUILD_DIR="$BUILD_DIR" LOG_DIR="$LOG_DIR" BUILD_JOBS="$BUILD_JOBS" \
+    bash "$ROOT/scripts/smoke_test.sh" | tee -a "$REPORT"
 
-log "A1.5) protocol smoke test"
-python3 "$ROOT/scripts/protocol_smoke_test.py" | tee -a "$REPORT"
-
-log "A1.6) bridge loopback test"
-python3 "$ROOT/scripts/bridge_loopback_test.py" | tee -a "$REPORT"
-
-log "A1.7) video manager smoke test"
-python3 "$ROOT/scripts/video_manager_smoke_test.py" | tee -a "$REPORT"
-
-if [[ "$RUN_RUNTIME_TESTS" != "1" ]]; then
-  log "A2-A4) runtime tests skipped; set RUN_RUNTIME_TESTS=1 to enable GUI restart/fuzz/stress checks"
-else
-
-log "A2) restart 10x"
-RESTART_ROUNDS="$RESTART_ROUNDS" BIN="$BIN" python3 - <<'PY' | tee -a "$REPORT"
-import subprocess, time
-import os
-r=int(os.getenv('RESTART_ROUNDS','10'))
-bin_path=os.getenv('BIN')
-ok=0
-for i in range(r):
-    p=subprocess.Popen([bin_path])
-    time.sleep(3)
-    alive=(p.poll() is None)
-    if alive:
-        ok += 1
-        p.terminate()
-        try:p.wait(timeout=2)
-        except: p.kill(); p.wait()
-print(f'RESTART_OK {ok}/{r}')
-PY
-
-log "A3) udp fuzz runtime 12s"
-FUZZ_SEC="$FUZZ_SEC" BIN="$BIN" python3 - <<'PY' | tee -a "$REPORT"
-import subprocess, time, socket, os, random
-p=subprocess.Popen([os.getenv('BIN')])
-time.sleep(2)
-start=time.time()
-s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-sent=0
-dur=float(os.getenv('FUZZ_SEC','12'))
-while time.time()-start<dur:
-    s.sendto(os.urandom(random.choice([0,1,2,3,4,5,6,8,15,32,64])),('127.0.0.1',9700)); sent+=1
-    for port in range(5000,5006):
-        s.sendto(os.urandom(random.choice([5,13,27,40,77])),('127.0.0.1',port)); sent+=1
-    time.sleep(0.02)
-alive=(p.poll() is None)
-if alive:
-    p.terminate()
-    try:p.wait(timeout=3)
-    except: p.kill(); p.wait()
-print(f'FUZZ_SENT {sent}')
-print(f'ALIVE_DURING_FUZZ {alive}')
-print(f'EXIT_CODE {p.returncode}')
-PY
-
-log "A4) 10min stress"
-STRESS_SEC="$STRESS_SEC" BIN="$BIN" python3 - <<'PY' | tee -a "$REPORT"
-import subprocess, time
-import os
-p=subprocess.Popen([os.getenv('BIN')])
-start=time.time()
-dur=float(os.getenv('STRESS_SEC','600'))
-while time.time()-start<dur:
-    if p.poll() is not None:
-        break
-    time.sleep(1)
-alive=(p.poll() is None)
-if alive:
-    p.terminate()
-    try:p.wait(timeout=5)
-    except: p.kill(); p.wait()
-print(f'ALIVE_10MIN {alive}')
-print(f'EXIT_CODE {p.returncode}')
-PY
-
+log "2) Independent RobotTcpClient / management regressions"
+cmake_args=(-S "$ROOT/tests/communication" -B "$COMMUNICATION_BUILD_DIR"
+    -DCMAKE_BUILD_TYPE=Debug -DHOST_BUILD_WIDGET_TESTS="$HOST_BUILD_WIDGET_TESTS")
+if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
+    cmake_args+=(-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH")
 fi
+"$CMAKE_BIN" "${cmake_args[@]}" | tee -a "$REPORT"
+"$CMAKE_BIN" --build "$COMMUNICATION_BUILD_DIR" -j "$BUILD_JOBS" | tee -a "$REPORT"
+"$CTEST_BIN" --test-dir "$COMMUNICATION_BUILD_DIR" --output-on-failure -j 3 | tee -a "$REPORT"
 
-log "B) mock ROS1 server script ready: scripts/mock_ros1_server.py"
-log "C) async tcp patch check:"
-if rg -n "waitForConnected|waitForDisconnected" "$ROOT/src/communication/ROS1TcpClient.cpp" >/dev/null; then
-  log "WARN: blocking wait still exists"
-else
-  log "PASS: no blocking wait calls found"
-fi
-
-log "DONE. report=$REPORT"
+log "3) Independent TCP/JSON mock protocol smoke"
+python3 -B "$ROOT/scripts/protocol_smoke_test.py" | tee -a "$REPORT"
+log "PASS: host build and mock tests completed; ROS2/hardware acceptance remains separate. report=$REPORT"

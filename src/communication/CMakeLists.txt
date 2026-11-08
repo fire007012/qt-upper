@@ -3,7 +3,7 @@
 # ============================================
 # 职责:
 #   - TCP 网络IO
-#   - ROS1 TCP通讯
+#   - 机器人 TCP/JSON通讯
 #   - 通过 signal 将数据发送到 Controller
 #
 # 依赖:
@@ -13,13 +13,21 @@
 # ============================================
 
 set(COMMUNICATION_SOURCES
+    ControlProtocol.cpp
+    ControlProtocol.h
+    ControlSession.cpp
+    ControlSession.h
+    EmergencyChannel.cpp
+    EmergencyChannel.h
+    ManagementClient.cpp
+    ManagementClient.h
     SharedStructs.h
     HostProtocol.cpp
     HostProtocol.h
 
-    # ROS1 TCP客户端
-    ROS1TcpClient.cpp
-    ROS1TcpClient.h
+    # 机器人 TCP/JSON客户端
+    RobotTcpClient.cpp
+    RobotTcpClient.h
 )
 
 # 构建静态库

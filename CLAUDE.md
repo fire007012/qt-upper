@@ -4,12 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于Qt6的C++桌面上位机应用，用于机器人电机控制、实时监控和多摄像头显示。通过TCP/JSON与Intel NUC下位机（Ubuntu 20.04 + ROS1）通信，支持RTSP视频流、手柄/键盘控制、IMU姿态显示、CO2传感器等功能。
+基于Qt6的C++桌面上位机应用，用于机器人电机控制、实时监控和多摄像头显示。通过TCP/JSON与Intel NUC下位机（ROS2，部署版本以文档39为准）通信，支持RTSP视频流、手柄/键盘控制、IMU姿态显示、CO2传感器等功能。
 
 ```
-Windows PC (上位机 Qt6)  ◄──TCP/JSON Port 9090──►  Intel NUC (下位机 ROS1)
+Windows PC (上位机 Qt6)  ◄──TCP/JSON Port 9090──►  Intel NUC (下位机 ROS2)
                          ◄──RTSP视频流──────────►  摄像头模组 (5路)
 ```
+
+当前工作边界以 `AGENTS.md` 为准：`ros2_ws_car/` 只读，禁止修改及写入测试/构建产物。旧桥接与部署资料已移至 `archive/ros1/`，不用于当前运行。管理服务使用独立 TCP9091，见 `39_下位机管理协议与Qt对接.md`。
 
 ## 构建命令
 
@@ -45,7 +47,7 @@ ninja
 │  + 输入: KeyboardController, HandleKey(SDL3)     │
 ├─────────────────────────────────────────────────┤
 │  Communication (src/communication/)              │ ← 通信层：仅TCP/JSON
-│  ROS1TcpClient + SharedStructs                   │
+│  RobotTcpClient + SharedStructs                   │
 ├─────────────────────────────────────────────────┤
 │  Utils (src/utils/)                              │ ← 工具层
 │  Logger + ErrorHandler                           │
@@ -62,14 +64,14 @@ ninja
 
 ### 关键数据流
 
-下位机状态 → `ROS1TcpClient`(TCP JSON接收) → `Controller`(信号转发) → `MainWindow`(更新UI)
+下位机状态 → `RobotTcpClient`(TCP JSON接收) → `Controller`(信号转发) → `MainWindow`(更新UI)
 
-用户操作 → `MainWindow`(事件捕获) → `KeyboardController`/`HandleKey` → `Controller`(命令封装) → `ROS1TcpClient`(JSON发送) → 下位机
+用户操作 → `MainWindow`(事件捕获) → `KeyboardController`/`HandleKey` → `Controller`(命令封装) → `RobotTcpClient`(JSON发送) → 下位机
 
 ## 核心组件
 
 ### 通信 (src/communication/)
-- **`ROS1TcpClient`**：异步TCP客户端，JSON格式数据交换，自动重连，心跳检测。主要信号：`motorStateReceived`, `co2DataReceived`, `imuDataReceived`, `cameraInfoReceived`
+- **`RobotTcpClient`**：异步TCP客户端，JSON格式数据交换，自动重连，心跳检测。主要信号：`motorStateReceived`, `co2DataReceived`, `imuDataReceived`, `cameraInfoReceived`
 - **`SharedStructs.h`**：定义`Communication::MotorState`, `Communication::Command`等跨层数据结构
 
 ### 控制 (src/controller/)
@@ -112,8 +114,8 @@ ninja
 ## 测试与调试
 
 ```bash
-# 模拟下位机ROS1服务器（用于无硬件调试）
-python scripts/mock_ros1_server.py
+# 独立TCP/JSON协议mock（不启动ROS或硬件）
+python scripts/mock_robot_server.py
 ```
 
 ## 对话要求

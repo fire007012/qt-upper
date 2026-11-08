@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+"""Standalone TCP/JSON control-protocol fixture; no ROS runtime or hardware.
+
+Only advertises the subset implemented here. This is not a ROS2 bridge or a
+management service; use the Qt communication regressions for fault coverage.
+"""
 import json
 import os
 import socket
@@ -99,7 +104,7 @@ def make_hello():
         "protocol_version": 1,
         "seq": 0,
         "timestamp_ms": now_ms(),
-        "bridge_name": "mock_ros1_bridge",
+        "bridge_name": "mock_robot_bridge",
         "bridge_version": "mock-1.0",
         "robot_id": "mock_robot",
     }
@@ -248,7 +253,7 @@ def main():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         s.bind((HOST, PORT))
         s.listen(5)
-        print(f"[mock] ROS1 mock server listening on {HOST}:{PORT}")
+        print(f"[mock] TCP/JSON mock server listening on {HOST}:{PORT}")
         while True:
             conn, addr = s.accept()
             t = threading.Thread(target=client_worker, args=(conn, addr), daemon=True)

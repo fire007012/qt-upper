@@ -1,3 +1,5 @@
+> **已退役：ROS1 历史资料，不适用于当前 ROS2 系统。** 当前入口见 [ROS2 对接说明](../../../下位机ROS节点对接文档.md) 和 [ROS2 视频联调](../../../docs/ROS2视频联调说明.md)。原路径和命令仅保留供追溯，不要用于当前部署。
+
 # MediaMTX 安装与 systemd 部署
 
 本文用于在下位机部署 MediaMTX。生产环境推荐由 systemd 常驻管理 MediaMTX，`video_stack.launch` 只启动 `video_manager_node` 和 `host_bridge_node`。

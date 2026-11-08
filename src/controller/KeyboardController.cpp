@@ -39,11 +39,13 @@ void KeyboardController::handleKeyRelease(QKeyEvent *event)
     if (!m_enabled || event->isAutoRepeat()) return;
 
     m_pressedKeys.remove(event->key());
+    m_waitingForRelease.remove(event->key());
     emit operatorInputChanged(pressedKeyNames());
 }
 
 void KeyboardController::clearPressedKeys()
 {
+    m_waitingForRelease.unite(m_pressedKeys);
     m_pressedKeys.clear();
     emit operatorInputChanged(pressedKeyNames());
 }
@@ -75,7 +77,7 @@ QStringList KeyboardController::pressedKeyNames() const
     QStringList keys;
     keys.reserve(m_pressedKeys.size());
 
-    for (int key : m_pressedKeys) {
+    for (int key : m_pressedKeys | m_waitingForRelease) {
         const QString name = protocolKeyName(key);
         if (!name.isEmpty()) {
             keys.append(name);

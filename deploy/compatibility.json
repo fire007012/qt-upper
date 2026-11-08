@@ -1,0 +1,12 @@
+{
+  "host_build_version": "host-ros2-v2-config-1",
+  "management_protocol_version": 1,
+  "control_protocol_version": 2,
+  "control_capabilities": ["session_v2", "freshness_v2", "explicit_authorization", "bounded_operations", "isolated_output", "runtime_permission"],
+  "reference_build_series": "robot24-p0-config-2",
+  "reference_documents": [39, 40, 41],
+  "tested_host_platform": "Linux x86_64 Qt6.12",
+  "windows_validated": false,
+  "physical_acceptance": false,
+  "stability_24h_validated": false
+}

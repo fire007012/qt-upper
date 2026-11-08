@@ -11,8 +11,9 @@
 #include "SharedStructs.h"
 
 namespace Communication {
-    class ROS1TcpClient;
+    class RobotTcpClient;
 }
+class RobotStateStore;
 
 /**
  * @brief Controller层 - 业务逻辑处理核心
@@ -40,6 +41,12 @@ public:
     bool connectTcp(const QString &host, quint16 port);
     void disconnectTcp();
     bool isTcpConnected() const;
+    bool setOperatorControlEnabled(bool enabled);
+    bool authorizeOperations();
+    bool recoverControlRequest(const QString &id);
+    QJsonObject controlDiagnostics() const;
+    QJsonObject diagnostics() const;
+    bool exportDiagnostics(const QString &path);
 
     // 命令发送接口
     bool sendMotorCommand(const Communication::MotorState &state);
@@ -53,7 +60,8 @@ public:
     bool requestCameraList();
 
     // TCP连接管理（供UI层对话框使用）
-    bool connectToROS(const QString &host, quint16 port);
+    bool connectToROS(const QString &host, quint16 port, const QString &robotId = QStringLiteral("robot24"));
+    bool connectManagedBridge(const QString &host, quint16 port, int protocolVersion, const QString &robotId);
     void disconnectFromROS();
     QString getROSHost() const;
     quint16 getROSPort() const;
@@ -82,6 +90,11 @@ signals:
     void tcpDisconnected();
     void tcpError(const QString &error);
     void tcpHeartbeatChanged(bool online);
+    void operatorControlChanged(bool enabled);
+    void operationsAuthorizationChanged(bool enabled);
+    void inputSampleRequested();
+    void inputResetRequested();
+    void telemetryFreshnessChanged(const QString &topic, bool fresh);
 
     // 数据接收信号
     void motorStateReceived(const Communication::MotorState &state);
@@ -119,7 +132,8 @@ private:
 
 private:
     // 通信组件
-    Communication::ROS1TcpClient* m_tcpClient;
+    Communication::RobotTcpClient* m_tcpClient;
+    RobotStateStore *m_stateStore;
 
     // 状态变量
     bool m_initialized;

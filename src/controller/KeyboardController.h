@@ -27,6 +27,7 @@ public:
 
     void setEnabled(bool enabled);
     bool isEnabled() const;
+    QStringList currentKeys() const { return pressedKeyNames(); }
 
 signals:
     void operatorInputChanged(const QStringList &pressedKeys);
@@ -41,6 +42,7 @@ private:
     QString protocolKeyName(int key) const;
 
     QSet<int> m_pressedKeys;
+    QSet<int> m_waitingForRelease;
     QTimer *m_sendTimer;
 
     bool m_enabled;

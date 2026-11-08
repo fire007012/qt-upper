@@ -5,6 +5,10 @@
 #include "src/controller/MotorRuntimeCarouselWidget.h"
 #include <QtGlobal>
 #include <QSpinBox>
+#include <QDockWidget>
+#include <QToolBar>
+#include "src/management/RuntimeManagementWidget.h"
+#include "src/diagnostics/DiagnosticsWidget.h"
 
 #include <QCloseEvent>
 #include <QMessageBox>
@@ -144,10 +148,39 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     setupStatusBar();
 
+    auto *runtimeDock = new QDockWidget(QStringLiteral("运行管理"), this);
+    auto *runtimeWidget = new RuntimeManagementWidget(runtimeDock);
+    runtimeDock->setWidget(runtimeWidget);
+    runtimeDock->setMinimumWidth(460);
+    addDockWidget(Qt::RightDockWidgetArea, runtimeDock);
+    runtimeDock->hide();
+    auto *runtimeToolbar = addToolBar(QStringLiteral("系统管理"));
+    auto *runtimeAction = runtimeDock->toggleViewAction();
+    runtimeAction->setText(QStringLiteral("运行管理 / 启动系统"));
+    runtimeToolbar->addAction(runtimeAction);
+    auto *diagnosticsDock = new QDockWidget(QStringLiteral("控制与遥测诊断"), this);
+    diagnosticsDock->setWidget(new DiagnosticsWidget(m_controller, diagnosticsDock));
+    diagnosticsDock->setMinimumWidth(500); addDockWidget(Qt::RightDockWidgetArea, diagnosticsDock); diagnosticsDock->hide();
+    runtimeToolbar->addAction(diagnosticsDock->toggleViewAction());
+    connect(runtimeWidget, &RuntimeManagementWidget::controlUnavailable, this, [this] {
+        m_controller->setOperatorControlEnabled(false);
+        clearOperatorInputSnapshot();
+        m_controller->disconnectTcp();
+    });
+    connect(runtimeWidget, &RuntimeManagementWidget::controlEndpointReady, this,
+            [this](const QString &host, quint16 port, int protocolVersion, const QString &robotId) {
+        clearOperatorInputSnapshot();
+        m_controller->setOperatorControlEnabled(false);
+        m_controller->connectManagedBridge(host, port, protocolVersion, robotId);
+        addCommand(QStringLiteral("[管理] 软件可服务，正在同步控制桥；遥控保持暂停"));
+    });
+
     // 初始化UI状态
     updateConnectionDisplay();
     updateHeartbeatDisplay();
     updateGamepadDisplay();
+    ui->label_co2_value->setText(QStringLiteral("未知/过期"));
+    if (m_telemetryPanel) m_telemetryPanel->setCO2Stale();
 
     // 添加系统启动提示
     addCommand("[系统] 主窗口初始化完成");
@@ -178,6 +211,38 @@ void MainWindow::setupController()
     connect(m_controller, &Controller::tcpDisconnected, this, &MainWindow::onTcpDisconnected);
     connect(m_controller, &Controller::tcpError, this, &MainWindow::onTcpError);
     connect(m_controller, &Controller::tcpHeartbeatChanged, this, &MainWindow::onTcpHeartbeatChanged);
+    connect(m_controller, &Controller::operatorControlChanged, this, [this](bool enabled) {
+        m_operatorControlEnabled = enabled;
+        if (m_operatorControlButton) {
+            m_operatorControlButton->setText(enabled ? QStringLiteral("暂停遥控") : QStringLiteral("允许遥控"));
+        }
+        addCommand(enabled ? QStringLiteral("[遥控] 已允许发送操作者输入")
+                           : QStringLiteral("[遥控] 已暂停，需要释放按键、摇杆归中并重新允许遥控"));
+    });
+
+    connect(m_controller, &Controller::operationsAuthorizationChanged, this, [this](bool enabled) {
+        m_operationsAuthorized = enabled;
+        if (m_operationsControlButton) m_operationsControlButton->setText(enabled ? QStringLiteral("撤销操作授权") : QStringLiteral("允许操作"));
+        addCommand(enabled ? QStringLiteral("[授权] 已允许生命周期/模式操作；运动仍需单独授权。") : QStringLiteral("[授权] 操作授权已撤销。"));
+    });
+    connect(m_controller, &Controller::inputSampleRequested, this, [this] {
+        if (m_handleKey) m_latestGamepadState = m_handleKey->sampleNow();
+        sendOperatorInputSnapshot();
+    }, Qt::QueuedConnection);
+    connect(m_controller, &Controller::inputResetRequested, this, [this] {
+        clearOperatorInputSnapshot();
+        if (m_keyboardController) m_keyboardController->clearPressedKeys();
+    });
+    connect(m_controller, &Controller::telemetryFreshnessChanged, this, [this](const QString &topic, bool fresh) {
+        if (topic == "control" && !fresh && m_controlPermissionLabel) m_controlPermissionLabel->setText(QStringLiteral("运行许可：未知/过期；桥接急停：待查询"));
+        if (topic == "co2" && !fresh) {
+            ui->label_co2_value->setText(QStringLiteral("未知/过期"));
+            ui->label_co2_value->setStyleSheet(QStringLiteral("color: #64748b;"));
+            if (m_telemetryPanel) m_telemetryPanel->setCO2Stale();
+        }
+        if (topic == "joints" && !fresh && m_motorRuntimeWidget) m_motorRuntimeWidget->setRuntimeStates({});
+        if (topic == "imu" && m_robotAttitudeWidget) m_robotAttitudeWidget->setDataFresh(fresh);
+    });
 
     // 数据接收
     connect(m_controller, &Controller::motorStateReceived, this, &MainWindow::onMotorStateReceived);
@@ -219,7 +284,7 @@ void MainWindow::setupDisplayLayout()
         connect(button, &QPushButton::clicked, this, [this, command]() {
             addCommand(QString("[生命周期] 请求 %1").arg(command));
             if (m_controller && m_controller->isTcpConnected()) {
-                m_controller->sendSystemCommand(command);
+                if (!m_controller->sendSystemCommand(command)) addError(QStringLiteral("[生命周期] 请求未发送，请确认v2会话、中立输入及“允许操作”授权。"));
             } else {
                 addError(QString("[生命周期] TCP未连接，未发送 %1").arg(command));
             }
@@ -237,14 +302,14 @@ void MainWindow::setupDisplayLayout()
     auto connectControlModeButton = [this](QPushButton *button, ControlMode controlMode,
                                            const QString &protocolMode,
                                            const QString &label) {
-        connect(button, &QPushButton::clicked, this, [this, controlMode, protocolMode, label]() {
+        Q_UNUSED(controlMode);
+        connect(button, &QPushButton::clicked, this, [this, protocolMode, label]() {
             addCommand(QString("[控制域] 请求切换到 %1").arg(label));
             if (m_controller && m_controller->isTcpConnected()) {
                 QJsonObject params;
                 params["mode"] = protocolMode;
                 if (m_controller->sendSystemCommand(QStringLiteral("set_control_mode"), params)) {
-                    applyControlMode(controlMode);
-                    sendOperatorInputSnapshot();
+                    addCommand(QStringLiteral("[控制域] 操作已提交，等待任务执行完成后同步实际模式。"));
                 }
             } else {
                 addError(QString("[控制域] TCP未连接，未发送 %1").arg(label));
@@ -511,6 +576,12 @@ void MainWindow::updateArmNamedTargets(const QJsonObject &message)
 void MainWindow::setupKeyboardController()
 {
     m_keyboardController = new KeyboardController(this);
+    connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
+        if (state == Qt::ApplicationActive) return;
+        if (m_controller) m_controller->setOperatorControlEnabled(false);
+        m_keyboardController->clearPressedKeys();
+        clearOperatorInputSnapshot();
+    });
     connect(m_keyboardController, &KeyboardController::operatorInputChanged,
             this, [this](const QStringList &pressedKeys) {
         static qint64 lastLogTime = 0;
@@ -578,11 +649,36 @@ void MainWindow::setupConnections()
 void MainWindow::setupStatusBar()
 {
     statusBar()->showMessage("系统就绪");
+    m_connectionPhaseLabel = new QLabel(QStringLiteral("控制链路：未连接"), this);
+    statusBar()->addPermanentWidget(m_connectionPhaseLabel);
+    m_controlPermissionLabel = new QLabel(QStringLiteral("运行许可：未知；桥接急停：未知"), this);
+    statusBar()->addPermanentWidget(m_controlPermissionLabel);
+    m_operationsControlButton = new QPushButton(QStringLiteral("允许操作"), this);
+    m_operationsControlButton->setToolTip(QStringLiteral("中立输入后显式授权初始化、使能、恢复和模式切换；不会授予运动权限。"));
+    statusBar()->addPermanentWidget(m_operationsControlButton);
+    connect(m_operationsControlButton, &QPushButton::clicked, this, [this] {
+        const bool sent = m_operationsAuthorized ? m_controller->setOperatorControlEnabled(false) : m_controller->authorizeOperations();
+        if (!sent) addError(QStringLiteral("[授权] 请确认控制v2已就绪、桥接急停已清除、按键释放及摇杆归中，并等待中立输入确认。"));
+    });
+    m_operatorControlButton = new QPushButton(QStringLiteral("允许遥控"), this);
+    m_operatorControlButton->setToolTip(QStringLiteral("仅在心跳正常、状态同步、急停已解除且输入中立时允许遥控；不替代下位机运行授权"));
+    statusBar()->addPermanentWidget(m_operatorControlButton);
+    connect(m_operatorControlButton, &QPushButton::clicked, this, [this]() {
+        if (!m_controller || !m_controller->setOperatorControlEnabled(!m_operatorControlEnabled)) {
+            addError(QStringLiteral("[遥控] 未满足授权条件：请确认连接、心跳和状态同步，解除急停，释放按键并将摇杆归中"));
+        }
+    });
 }
 
 void MainWindow::updateConnectionStatus(bool connected)
 {
     m_isConnected = connected;
+    m_lastOperatorInputStatus.clear();
+    if (!connected) {
+        m_keyboardPressedKeys.clear();
+        if (m_keyboardController) m_keyboardController->clearPressedKeys();
+        m_latestGamepadState = {};
+    }
     updateConnectionDisplay();
 
     if (connected) {
@@ -957,18 +1053,14 @@ void MainWindow::clearOperatorInputSnapshot()
 
 void MainWindow::triggerEmergencyStop(const QString &source)
 {
-    const qint64 now = QDateTime::currentMSecsSinceEpoch();
-    if (now - m_lastEmergencyStopMs < 150) {
-        return;
-    }
-
-    m_lastEmergencyStopMs = now;
+    if (m_emergencyDebounce.isValid() && m_emergencyDebounce.elapsed() < 150) return;
+    m_emergencyDebounce.start();
 
     // === 最高优先级急停处理 ===
     addCommand(QString("[急停] 用户触发急停 source=%1").arg(source));
 
-    // 1. 立即停止所有运动（TCP通道）
-    if (m_controller && m_controller->isTcpConnected()) {
+    // Independent emergency connection works even if the ordinary session/lease has failed.
+    if (m_controller) {
         if (m_controller->sendEmergencyStop(source)) {
             addCommand("[急停] TCP急停指令已发送，等待ACK");
         } else {
@@ -1080,8 +1172,8 @@ void MainWindow::sendOperatorInputSnapshot()
     Communication::OperatorInputState inputState;
     inputState.mode = modeNameForProtocol(m_controlMode);
     inputState.ttlMs = 300;
-    inputState.keyboard.pressedKeys = m_keyboardPressedKeys;
-    inputState.gamepad = makeGamepadInputState(m_latestGamepadState, m_gamepadConnected);
+    inputState.keyboard.pressedKeys = m_keyboardController ? m_keyboardController->currentKeys() : QStringList{};
+    inputState.gamepad = makeGamepadInputState(m_latestGamepadState, m_handleKey && m_handleKey->isConnected());
 
     m_controller->sendOperatorInput(inputState);
 }
@@ -1199,6 +1291,10 @@ void MainWindow::showTcpConnectionDialog()
     portSpin->setMinimumWidth(200);
     portLayout->addWidget(portSpin);
     layout->addLayout(portLayout);
+
+    auto *robotEdit = new QLineEdit(settings.value("tcp/robot_id", "robot24").toString(), &dialog);
+    robotEdit->setPlaceholderText(QStringLiteral("须与下位机robot_id精确一致"));
+    layout->addWidget(new QLabel(QStringLiteral("机器人身份（控制v2）"), &dialog)); layout->addWidget(robotEdit);
 
     // ====== 网络配置区域 ======
     QFrame* separator = new QFrame();
@@ -1459,11 +1555,12 @@ void MainWindow::showTcpConnectionDialog()
         }
 
         addCommand(QString("[TCP] 正在连接到 %1:%2 ...").arg(host).arg(port));
-        bool started = m_controller ? m_controller->connectToROS(host, port) : false;
+        bool started = m_controller ? m_controller->connectToROS(host, port, robotEdit->text().trimmed()) : false;
         if (started) {
             // 已成功发起连接尝试；最终连接结果由信号回调
             settings.setValue("tcp/host", host);
             settings.setValue("tcp/port", port);
+            settings.setValue("tcp/robot_id", robotEdit->text().trimmed());
         } else {
             addError(QString("[TCP] 发起连接失败: %1:%2").arg(host).arg(port));
         }
@@ -1478,7 +1575,6 @@ void MainWindow::onTcpConnected()
     updateConnectionStatus(true);
     addCommand("[TCP] 已连接到ROS节点");
     sendOperatorInputSnapshot();
-    refreshArmNamedTargets();
     if (m_controller) {
         statusBar()->showMessage(QString("TCP已连接: %1:%2")
             .arg(m_controller->getROSHost()).arg(m_controller->getROSPort()));
@@ -1490,7 +1586,7 @@ void MainWindow::onTcpDisconnected()
     updateConnectionStatus(false);
     addCommand("[TCP] 与ROS节点断开连接");
     statusBar()->showMessage("TCP连接断开");
-    updateCarAttitude(0.0, 0.0, 0.0);
+    if (m_robotAttitudeWidget) m_robotAttitudeWidget->setDataFresh(false);
 }
 
 void MainWindow::onTcpError(const QString &error)
@@ -1559,11 +1655,61 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
 {
     const QString type = message["type"].toString();
 
+    if (type == "connection_state") {
+        const QString state = message["state"].toString();
+        QString text = state;
+        if (state == "disconnected") text = QStringLiteral("未连接");
+        else if (state == "connecting") text = QStringLiteral("连接中");
+        else if (state == "negotiating") text = QStringLiteral("控制v2协商中");
+        else if (state == "syncing") text = QStringLiteral("状态同步中");
+        else if (state == "ready") text = QStringLiteral("通信已就绪");
+        else if (state == "reconnecting") text = QStringLiteral("等待重连");
+        if (m_connectionPhaseLabel) m_connectionPhaseLabel->setText(QStringLiteral("控制链路：") + text);
+        addCommand(QStringLiteral("[连接] ") + text);
+        return;
+    }
+
+    if (type == "control_status") {
+        const auto status = message["status"].toObject();
+        if (m_controlPermissionLabel) m_controlPermissionLabel->setText(QStringLiteral("运行许可：%1；桥接急停：%2")
+            .arg(status["motion_permitted"].toBool() ? QStringLiteral("允许") : QStringLiteral("禁止"),
+                 status["emergency_active"].toBool() ? QStringLiteral("锁存") : QStringLiteral("已清除")));
+        return;
+    }
+    if (type == "control_operation") {
+        const auto op = message["operation"].toObject();
+        const auto id = op["request_id"].toString();
+        const auto summary = QStringLiteral("%1 / %2 / %3 / invalidated=%4").arg(op["command"].toString(), op["state"].toString(), op["error"].toString()).arg(op["invalidated"].toBool());
+        if (m_operationSummaries.value(id) != summary) {
+            if (m_operationSummaries.size() >= 64) m_operationSummaries.erase(m_operationSummaries.begin());
+            m_operationSummaries[id] = summary;
+            const auto text = QStringLiteral("[控制任务] %1 operation=%2 request=%3").arg(summary, op["operation_id"].toString(), id);
+            if (op["state"] == QJsonValue("failed") || op["state"] == QJsonValue("result_unknown") || op["invalidated"].toBool()) addError(text);
+            else addCommand(text);
+        }
+        return;
+    }
+    if (type == "control_notice") {
+        const auto text = message["code"].toString() + ": " + message["message"].toString();
+        if (text != m_lastControlNotice) { m_lastControlNotice = text; addError(QStringLiteral("[控制v2] ") + text); }
+        return;
+    }
+    if (type == "emergency_result") {
+        const auto text = message["ok"].toBool() ? QStringLiteral("[急停] 桥接已锁存并发起停止；物理停止仍需独立确认。")
+            : QStringLiteral("[急停] 请求结果未知：%1；请使用独立停止保障。").arg(message["error"].toString());
+        if (message["ok"].toBool()) addCommand(text); else addError(text);
+        return;
+    }
     if (type == "ack_pending") {
         addCommand(QString("[ACK] waiting %1 seq=%2 timeout=%3ms")
                    .arg(message["ack_type"].toString("unknown"))
                    .arg(message["seq"].toVariant().toLongLong())
                    .arg(message["timeout_ms"].toInt()));
+        return;
+    }
+
+    if (type == "connection_recovery") {
+        addCommand(QString("[连接] 将在 %1ms 后自动重试").arg(message["retry_in_ms"].toInt()));
         return;
     }
 
@@ -1588,9 +1734,9 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
         return;
     }
 
-    if (type == "ack_timeout" || type == "ack_disconnected") {
+    if (type == "ack_timeout" || type == "ack_disconnected" || type == "ack_superseded") {
         addError(QString("[ACK] %1 %2 seq=%3 elapsed=%4ms")
-                 .arg(type == "ack_timeout" ? "TIMEOUT" : "DISCONNECTED")
+                 .arg(type)
                  .arg(message["ack_type"].toString("unknown"))
                  .arg(message["seq"].toVariant().toLongLong())
                  .arg(message["elapsed_ms"].toVariant().toLongLong()));
@@ -1737,6 +1883,16 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
             updateArmNamedTargets(message);
         }
         if (message.contains("last_operator_input_seq")) {
+            const QString inputStatus = message["operator_input_status"].toString();
+            if (!inputStatus.isEmpty() && inputStatus != m_lastOperatorInputStatus) {
+                m_lastOperatorInputStatus = inputStatus;
+                const QString line = QString("[控制输入] %1 seq=%2 watchdog=%3")
+                    .arg(inputStatus)
+                    .arg(message["last_operator_input_seq"].toVariant().toLongLong())
+                    .arg(message["watchdog_active"].toBool() ? "active" : "clear");
+                if (inputStatus == QStringLiteral("accepted")) addCommand(line);
+                else addError(line);
+            }
             return;
         }
         addCommand(QString("[状态] system_status seq=%1")

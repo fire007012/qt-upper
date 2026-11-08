@@ -1,5 +1,5 @@
-#ifndef ROS1_TCP_CLIENT_H
-#define ROS1_TCP_CLIENT_H
+#ifndef ROBOT_TCP_CLIENT_H
+#define ROBOT_TCP_CLIENT_H
 
 #include <QObject>
 #include <QTcpSocket>
@@ -9,25 +9,30 @@
 #include <QJsonObject>
 #include <QByteArray>
 #include <QHash>
+#include <QElapsedTimer>
 #include "HostProtocol.h"
 #include "SharedStructs.h"
 #include "Logger.h"
 #include "ErrorHandler.h"
+#include "ControlSession.h"
+#include "EmergencyChannel.h"
 
 namespace Communication {
 
 /**
- * @brief 线程安全的ROS1 TCP客户端
+ * @brief 机器人 TCP/JSON 客户端，对接 ROS2 host_bridge，无 ROS 依赖
  *
- * 运行在独立的Command线程中，与Intel NUC (ROS1)进行TCP+JSON通讯
+ * socket、定时器和公开方法应在对象所属线程使用；跨线程使用槽调用。
  */
-class ROS1TcpClient : public QObject
+class RobotTcpClient : public QObject
 {
     Q_OBJECT
 
 public:
-    explicit ROS1TcpClient(QObject *parent = nullptr);
-    ~ROS1TcpClient();
+    enum class ConnectionState { Disconnected, Connecting, Negotiating, Syncing, Ready, Reconnecting };
+    Q_ENUM(ConnectionState)
+    explicit RobotTcpClient(QObject *parent = nullptr);
+    ~RobotTcpClient();
 
     // 连接管理
     // 返回值表示“是否成功发起连接尝试”，不表示已经建立连接。
@@ -35,6 +40,15 @@ public:
     bool connectToROS(const QString &hostAddress, quint16 port = 9090);
     void disconnectFromROS();
     bool isConnected() const;
+    void setRequiredCapabilities(const QStringList &capabilities) { m_requiredCapabilities = capabilities; }
+    void configureControlV2(const QString &robotId);
+    bool usesControlV2() const { return m_controlV2; }
+    bool authorizeOperations() { return m_controlV2 && m_session.authorizeOperations(); }
+    bool recoverControlRequest(const QString &id) { return m_controlV2 && m_session.recoverRequest(id); }
+    QJsonObject controlDiagnostics() const { return m_controlV2 ? m_session.diagnostics() : QJsonObject{{"protocol_version", 1}}; }
+    ConnectionState connectionState() const { return m_connectionState; }
+    bool setOperatorControlEnabled(bool enabled);
+    bool isOperatorControlEnabled() const { return m_operatorControlEnabled; }
 
     // 数据发送（线程安全）
     bool sendMotorCommand(const MotorState &motorState);
@@ -89,6 +103,10 @@ signals:
     void cameraInfoReceived(int cameraId, const QString &rtspUrl, bool online,
                             const QString &codec, int width, int height, int fps, int bitrateKbps);
     void heartbeatChanged(bool online);
+    void operatorControlChanged(bool enabled);
+    void operationsAuthorizationChanged(bool enabled);
+    void inputSampleRequested();
+    void inputResetRequested();
 
     // 统计信息更新信号
     void statsUpdated(const Stats &stats);
@@ -119,6 +137,11 @@ private:
     };
 
     void setupConnection();
+    void bindSocketSignals();
+    void beginConnectionAttempt();
+    void scheduleReconnect();
+    void recoverConnection(const QString &reason);
+    void setConnectionState(ConnectionState state);
     bool sendMessage(const QJsonObject &message);
     bool sendTrackedMessage(const QJsonObject &message, const QString &ackType);
     quint64 nextSequence();
@@ -137,6 +160,7 @@ private:
     void closeForProtocolError(qint64 seq, int code, const QString &message);
     void trimExpiredHeartbeats(qint64 nowMs);
     void processReceivedData();
+    void processLegacyMessage(const QJsonObject &message, qint64 receivedAtMs);
     MotorState parseMotorState(const QJsonObject &json);
     JointRuntimeStateList parseJointRuntimeStates(const QJsonObject &json);
     void setHeartbeatOnline(bool online);
@@ -150,6 +174,12 @@ private:
     QTimer *m_heartbeatTimer;
     QTimer *m_reconnectTimer;
     QTimer *m_ackTimer;
+    QTimer *m_connectTimer;
+    QElapsedTimer m_clock;
+    ControlSession m_session;
+    EmergencyChannel m_emergencyChannel;
+    bool m_controlV2 = false;
+    QString m_expectedRobot;
 
     bool m_isConnected;
     bool m_autoReconnect;
@@ -158,6 +188,16 @@ private:
     int m_reconnectAttempts;
     qint64 m_lastMessageReceivedMs;
     qint64 m_lastHeartbeatAckMs;
+    qint64 m_connectedAtMs = -1;
+    bool m_operatorControlEnabled = false;
+    ConnectionState m_connectionState = ConnectionState::Disconnected;
+    bool m_latestInputNeutral = false;
+    bool m_stateSynchronized = false;
+    QStringList m_requiredCapabilities;
+    bool m_capabilitiesVerified = false;
+    bool m_emergencyActive = true;
+    quint64 m_syncRequestSeq = 0;
+    qint64 m_lastInputSampleMs = -1;
     quint64 m_nextSequence;
     QHash<quint64, PendingAck> m_pendingAcks;
     QHash<quint64, qint64> m_pendingHeartbeats;
@@ -166,15 +206,19 @@ private:
     Stats m_stats;
 
     // 静态常量
-    static const int MAX_RECONNECT_ATTEMPTS = 5;
-    static const int HEARTBEAT_INTERVAL_MS = 1000;
-    static const int RECONNECT_INTERVAL_MS = 3000;
-    static const int ACK_TIMEOUT_MS = 2000;
-    static const int ACK_CHECK_INTERVAL_MS = 100;
-    static const int MAX_FRAME_BYTES = 1024 * 1024;
-    static const int MAX_CAMERA_COUNT = 6;
+    static constexpr int HEARTBEAT_INTERVAL_MS = 1000;
+    static constexpr int RECONNECT_INTERVAL_MS = 3000;
+    static constexpr int MAX_RECONNECT_INTERVAL_MS = 10000;
+    static constexpr int CONNECT_TIMEOUT_MS = 10000;
+    static constexpr int HEARTBEAT_TIMEOUT_MS = HEARTBEAT_INTERVAL_MS * 3;
+    static constexpr int ACK_TIMEOUT_MS = 2000;
+    static constexpr int ACK_CHECK_INTERVAL_MS = 100;
+    static constexpr int MAX_FRAME_BYTES = 64 * 1024;
+    static constexpr int MAX_CAMERA_COUNT = 6;
+    static constexpr int MAX_PENDING_SEND_BYTES = 64 * 1024;
+    static constexpr int MAX_PENDING_ACKS = 128;
 };
 
 } // namespace Communication
 
-#endif // ROS1_TCP_CLIENT_H
+#endif // ROBOT_TCP_CLIENT_H

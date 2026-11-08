@@ -2,27 +2,39 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-$ROOT/build-smoke}"
+BUILD_DIR="${BUILD_DIR:-/tmp/hostcomputer-build-smoke}"
+CMAKE_BIN="${CMAKE_BIN:-cmake}"
 BUILD_TYPE="${CMAKE_BUILD_TYPE:-Debug}"
 BUILD_JOBS="${BUILD_JOBS:-8}"
 RUN_APP_SMOKE="${RUN_APP_SMOKE:-0}"
 BIN="$BUILD_DIR/hostcomputer"
-LOG_DIR="$ROOT/test-logs"
+LOG_DIR="${LOG_DIR:-/tmp/hostcomputer-test-logs}"
 LOG_FILE="$LOG_DIR/smoke_$(date +%Y%m%d_%H%M%S).log"
 
+REFERENCE_DIR="$(realpath -m "$ROOT/ros2_ws_car")"
+for output_dir in "$BUILD_DIR" "$LOG_DIR"; do
+  resolved_dir="$(realpath -m "$output_dir")"
+  case "$resolved_dir" in
+    "$REFERENCE_DIR"|"$REFERENCE_DIR"/*|"$ROOT"|"$ROOT/archive"|"$ROOT/archive"/*)
+      echo "拒绝写入源码根目录、只读参考目录或历史归档: $output_dir" >&2
+      exit 1 ;;
+  esac
+done
 mkdir -p "$LOG_DIR"
 
 echo "[1/4] 配置 CMake..."
 cmake_args=(-S "$ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE")
 if [[ -n "${CMAKE_PREFIX_PATH:-}" ]]; then
   cmake_args+=(-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH")
+elif [[ -d "$HOME/Qt/6.12.0/gcc_64" ]]; then
+  cmake_args+=(-DCMAKE_PREFIX_PATH="$HOME/Qt/6.12.0/gcc_64")
 elif [[ -d "$HOME/Qt/6.7.3/gcc_64" ]]; then
   cmake_args+=(-DCMAKE_PREFIX_PATH="$HOME/Qt/6.7.3/gcc_64")
 fi
-cmake "${cmake_args[@]}" | tee -a "$LOG_FILE"
+"$CMAKE_BIN" "${cmake_args[@]}" | tee -a "$LOG_FILE"
 
 echo "[2/4] 编译..."
-cmake --build "$BUILD_DIR" -j"$BUILD_JOBS" | tee -a "$LOG_FILE"
+"$CMAKE_BIN" --build "$BUILD_DIR" -j"$BUILD_JOBS" | tee -a "$LOG_FILE"
 
 echo "[3/4] 检查可执行文件..."
 if [[ ! -x "$BIN" ]]; then

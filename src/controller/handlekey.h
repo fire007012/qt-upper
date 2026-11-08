@@ -46,6 +46,7 @@ public:
     ~HandleKey() override;
 
     bool isConnected() const { return m_connected; }
+    ControllerState sampleNow() { readGamepad(); return state; }
     void startPolling();
     void stopPolling();
 

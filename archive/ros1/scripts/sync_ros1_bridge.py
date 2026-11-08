@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
+
 from __future__ import annotations
+
+if __name__ == "__main__":
+    raise SystemExit("ROS1同步脚本已退役；ROS2部署由独立下位机工程负责，禁止向ROS2工作区复制旧桥接。")
+
 
 import os
 import shutil

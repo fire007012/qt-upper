@@ -1,13 +1,17 @@
 #include "controller.h"
-#include "ROS1TcpClient.h"
+#include "RobotTcpClient.h"
+#include "../state/RobotStateStore.h"
+#include <QJsonArray>
 #include <QDebug>
 
 Controller::Controller(QObject *parent)
     : QObject(parent)
     , m_tcpClient(nullptr)
+    , m_stateStore(new RobotStateStore(this))
     , m_initialized(false)
     , m_running(false)
 {
+    connect(m_stateStore, &RobotStateStore::freshnessChanged, this, &Controller::telemetryFreshnessChanged);
 }
 
 Controller::~Controller()
@@ -24,7 +28,7 @@ bool Controller::initialize()
     }
 
     // 初始化TCP客户端
-    m_tcpClient = new Communication::ROS1TcpClient(this);
+    m_tcpClient = new Communication::RobotTcpClient(this);
 
     // 设置信号连接
     setupConnections();
@@ -59,17 +63,16 @@ void Controller::stop()
 bool Controller::connectTcp(const QString &host, quint16 port)
 {
     if (!m_tcpClient) {
-        qCritical() << "ROS1TcpClient not initialized";
+        qCritical() << "RobotTcpClient not initialized";
         return false;
     }
 
-    m_tcpClient->connectToROS(host, port);
-    return true;
+    return connectToROS(host, port);
 }
 
 void Controller::disconnectTcp()
 {
-    if (m_tcpClient && m_tcpClient->isConnected()) {
+    if (m_tcpClient) {
         m_tcpClient->disconnectFromROS();
     }
 }
@@ -77,6 +80,36 @@ void Controller::disconnectTcp()
 bool Controller::isTcpConnected() const
 {
     return m_tcpClient && m_tcpClient->isConnected();
+}
+
+bool Controller::setOperatorControlEnabled(bool enabled)
+{
+    return m_tcpClient && m_tcpClient->setOperatorControlEnabled(enabled);
+}
+
+bool Controller::authorizeOperations() { return m_tcpClient && m_tcpClient->authorizeOperations(); }
+bool Controller::recoverControlRequest(const QString &id) { return m_tcpClient && m_tcpClient->recoverControlRequest(id); }
+QJsonObject Controller::controlDiagnostics() const { return m_tcpClient ? m_tcpClient->controlDiagnostics() : QJsonObject{}; }
+
+QJsonObject Controller::diagnostics() const
+{
+    const auto s = getTcpStatistics();
+    const QJsonObject transport{{"host", getROSHost()}, {"port", getROSPort()}, {"connected", isTcpConnected()},
+        {"messages_sent", static_cast<qint64>(s.messagesSent)}, {"messages_received", static_cast<qint64>(s.messagesReceived)},
+        {"bytes_sent", static_cast<qint64>(s.bytesSent)}, {"bytes_received", static_cast<qint64>(s.bytesReceived)},
+        {"connection_count", static_cast<qint64>(s.connectionCount)}, {"reconnect_count", static_cast<qint64>(s.reconnectCount)},
+        {"heartbeat_rtt_ms", s.lastHeartbeatRttMs}, {"heartbeat_timeouts", static_cast<qint64>(s.heartbeatTimeoutCount)},
+        {"protocol_errors", static_cast<qint64>(s.protocolErrorCount)}};
+    return m_stateStore->diagnosticBundle({{"host_build_version", Communication::ControlProtocol::HostBuildVersion}, {"control", controlDiagnostics()}, {"transport", transport}});
+}
+bool Controller::exportDiagnostics(const QString &path)
+{
+#ifdef HOST_REFERENCE_ROOT
+    const QString protectedRoot = QString::fromUtf8(HOST_REFERENCE_ROOT);
+#else
+    const QString protectedRoot;
+#endif
+    return m_stateStore->exportFile(path, diagnostics()["context"].toObject(), protectedRoot);
 }
 
 // ==================== 命令发送接口 ====================
@@ -123,8 +156,7 @@ bool Controller::sendJointControl(int jointId, float position, float velocity)
 
 bool Controller::sendEmergencyStop(const QString &source)
 {
-    if (!m_tcpClient || !m_tcpClient->isConnected()) {
-        qWarning() << "TCP not connected, cannot send emergency stop";
+    if (!m_tcpClient) {
         return false;
     }
 
@@ -173,13 +205,25 @@ bool Controller::requestCameraList()
 
 // ==================== TCP连接管理（供UI层对话框使用） ====================
 
-bool Controller::connectToROS(const QString &host, quint16 port)
+bool Controller::connectManagedBridge(const QString &host, quint16 port, int protocolVersion, const QString &robotId)
+{
+    if (!m_tcpClient) return false;
+    if (protocolVersion != 2) {
+        m_tcpClient->disconnectFromROS();
+        emit tcpError(QStringLiteral("管理端点未声明控制v2，请使用匹配的下位机构建。")); return false;
+    }
+    m_tcpClient->configureControlV2(robotId);
+    return m_tcpClient->connectToROS(host, port);
+}
+
+bool Controller::connectToROS(const QString &host, quint16 port, const QString &robotId)
 {
     if (!m_tcpClient) {
-        qCritical() << "ROS1TcpClient not initialized";
+        qCritical() << "RobotTcpClient not initialized";
         return false;
     }
 
+    m_tcpClient->configureControlV2(robotId);
     return m_tcpClient->connectToROS(host, port);
 }
 
@@ -239,25 +283,30 @@ void Controller::setupConnections()
 {
     // TCP信号连接
     if (m_tcpClient) {
-        connect(m_tcpClient, &Communication::ROS1TcpClient::connectedToROS,
+        connect(m_tcpClient, &Communication::RobotTcpClient::connectedToROS,
                 this, &Controller::onTcpConnected);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::disconnectedFromROS,
+        connect(m_tcpClient, &Communication::RobotTcpClient::disconnectedFromROS,
                 this, &Controller::onTcpDisconnected);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::connectionError,
+        connect(m_tcpClient, &Communication::RobotTcpClient::connectionError,
                 this, &Controller::onTcpError);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::heartbeatChanged,
+        connect(m_tcpClient, &Communication::RobotTcpClient::heartbeatChanged,
                 this, &Controller::tcpHeartbeatChanged);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::motorStateReceived,
+        connect(m_tcpClient, &Communication::RobotTcpClient::operatorControlChanged,
+                this, &Controller::operatorControlChanged);
+        connect(m_tcpClient, &Communication::RobotTcpClient::operationsAuthorizationChanged, this, &Controller::operationsAuthorizationChanged);
+        connect(m_tcpClient, &Communication::RobotTcpClient::inputSampleRequested, this, &Controller::inputSampleRequested);
+        connect(m_tcpClient, &Communication::RobotTcpClient::inputResetRequested, this, &Controller::inputResetRequested);
+        connect(m_tcpClient, &Communication::RobotTcpClient::motorStateReceived,
                 this, &Controller::onTcpMotorStateReceived);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::jointRuntimeStatesReceived,
+        connect(m_tcpClient, &Communication::RobotTcpClient::jointRuntimeStatesReceived,
                 this, &Controller::onTcpJointRuntimeStatesReceived);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::co2DataReceived,
+        connect(m_tcpClient, &Communication::RobotTcpClient::co2DataReceived,
                 this, &Controller::onTcpCO2DataReceived);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::imuDataReceived,
+        connect(m_tcpClient, &Communication::RobotTcpClient::imuDataReceived,
                 this, &Controller::onTcpIMUDataReceived);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::cameraInfoReceived,
+        connect(m_tcpClient, &Communication::RobotTcpClient::cameraInfoReceived,
                 this, &Controller::onTcpCameraInfoReceived);
-        connect(m_tcpClient, &Communication::ROS1TcpClient::systemStatusReceived,
+        connect(m_tcpClient, &Communication::RobotTcpClient::systemStatusReceived,
                 this, &Controller::onTcpSystemStatusReceived);
     }
 
@@ -289,17 +338,23 @@ void Controller::onTcpMotorStateReceived(const Communication::MotorState &state)
 
 void Controller::onTcpJointRuntimeStatesReceived(const Communication::JointRuntimeStateList &states)
 {
+    QJsonArray values;
+    for (const auto &s : states) values.append(QJsonObject{{"joint_name", s.jointName}, {"backend", s.backend}, {"lifecycle_state", s.lifecycleState},
+        {"online", s.online}, {"enabled", s.enabled}, {"fault", s.fault}});
+    m_stateStore->observe("joints", values, 3000);
     emit jointRuntimeStatesReceived(states);
 }
 
 void Controller::onTcpCO2DataReceived(float ppm)
 {
+    m_stateStore->observe("co2", ppm, 3000);
     emit co2DataReceived(ppm);
 }
 
 void Controller::onTcpIMUDataReceived(float roll, float pitch, float yaw,
                                       float accelX, float accelY, float accelZ)
 {
+    m_stateStore->observe("imu", QJsonObject{{"roll", roll}, {"pitch", pitch}, {"yaw", yaw}, {"accel_x", accelX}, {"accel_y", accelY}, {"accel_z", accelZ}}, 3000);
     emit imuDataReceived(roll, pitch, yaw, accelX, accelY, accelZ);
 }
 
@@ -311,6 +366,7 @@ void Controller::onTcpCameraInfoReceived(int cameraId, const QString &rtspUrl, b
 
 void Controller::onTcpSystemStatusReceived(const QJsonObject &status)
 {
+    m_stateStore->ingest(status);
     emit protocolMessageReceived(status);
 }
 

@@ -22,6 +22,7 @@ public:
     void setGamepadConnected(bool connected);
     void setErrorCount(int count);
     void setCO2Value(float ppm);
+    void setCO2Stale() { setMetricValue(QStringLiteral("co2"), QStringLiteral("未知/过期"), QStringLiteral("#64748b")); }
 
 private:
     void setMetricValue(const QString &key, const QString &value, const QString &color = QString());
