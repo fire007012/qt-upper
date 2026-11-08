@@ -13,3 +13,7 @@ __pycache__/
 CMakeLists.txt.user*
 *.autosave
 .qodo/
+
+# 下位机只读参考副本，不纳入上位机仓库
+/ros2_ws_car/
+/ros2-ws-car/
