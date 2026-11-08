@@ -127,6 +127,25 @@ private slots:
         QCOMPARE(client.getStats().connectionCount,connections);
         QVERIFY(!client.controlDiagnostics()["operations_authorized"].toBool());
     }
+    void ros2RuntimeAndEmergency() {
+        RobotTcpClient client; OperatorInputState input; start(client,input); authorize(client);
+        input.keyboard.pressedKeys=QStringList{"w"};
+        QTest::qWait(500); QVERIFY(client.isOperatorControlEnabled());
+        QVERIFY(client.sendSystemCommand("init"));
+        QTRY_COMPARE(lastOperation(client)["state"].toString(),QString("running"));
+        const auto before=client.getStats().messagesReceived;
+        QTest::qWait(1000); QVERIFY(client.getStats().messagesReceived>before+10);
+        QCOMPARE(client.connectionState(),RobotTcpClient::ConnectionState::Ready);
+        QSignalSpy events(&client,&RobotTcpClient::systemStatusReceived);
+        QVERIFY(client.sendEmergencyStop("ros2-mock-probe")); input={}; bool accepted=false;
+        QTRY_VERIFY_WITH_TIMEOUT(([&]{for(const auto &args:events){const auto e=args[0].toJsonObject();
+            if(e["type"]==QJsonValue("emergency_result")&&e["ok"]==QJsonValue(true))accepted=true;}return accepted;})(),1000);
+        QVERIFY(!client.isOperatorControlEnabled());
+        QTRY_COMPARE_WITH_TIMEOUT(lastOperation(client)["state"].toString(),QString("succeeded"),10000);
+        QVERIFY(lastOperation(client)["invalidated"].toBool());
+        QVERIFY(!client.isOperatorControlEnabled()); QVERIFY(!client.controlDiagnostics()["operations_authorized"].toBool());
+        QTest::qWait(300);
+    }
 };
 QTEST_GUILESS_MAIN(ControlReferenceTest)
 #include "control_reference_probe.moc"

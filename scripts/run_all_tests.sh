@@ -9,8 +9,10 @@ COMMUNICATION_BUILD_DIR="${COMMUNICATION_BUILD_DIR:-/tmp/hostcomputer-communicat
 LOG_DIR="${LOG_DIR:-/tmp/hostcomputer-test-logs}"
 BUILD_JOBS="${BUILD_JOBS:-4}"
 HOST_BUILD_WIDGET_TESTS="${HOST_BUILD_WIDGET_TESTS:-OFF}"
+HOST_BUILD_VIDEO_TESTS="${HOST_BUILD_VIDEO_TESTS:-OFF}"
+VIDEO_BUILD_DIR="${VIDEO_BUILD_DIR:-/tmp/hostcomputer-video-tests}"
 REFERENCE_DIR="$(realpath -m "$ROOT/ros2_ws_car")"
-for output_dir in "$BUILD_DIR" "$COMMUNICATION_BUILD_DIR" "$LOG_DIR"; do
+for output_dir in "$BUILD_DIR" "$COMMUNICATION_BUILD_DIR" "$VIDEO_BUILD_DIR" "$LOG_DIR"; do
     resolved_dir="$(realpath -m "$output_dir")"
     case "$resolved_dir" in
         "$REFERENCE_DIR"|"$REFERENCE_DIR"/*|"$ROOT"|"$ROOT/archive"|"$ROOT/archive"/*)
@@ -38,4 +40,17 @@ fi
 
 log "3) Independent TCP/JSON mock protocol smoke"
 python3 -B "$ROOT/scripts/protocol_smoke_test.py" | tee -a "$REPORT"
+log "4) Host release/evidence tool boundaries"
+python3 -B -m unittest discover -s "$ROOT/tests/tools" -v 2>&1 | tee -a "$REPORT"
+if [[ "$HOST_BUILD_VIDEO_TESTS" == "ON" || "${RUN_RTSP_TESTS:-0}" == "1" ]]; then
+    log "5) Production FFmpeg decoder lifecycle"
+    "$CMAKE_BIN" -S "$ROOT/tests/video" -B "$VIDEO_BUILD_DIR" | tee -a "$REPORT"
+    "$CMAKE_BIN" --build "$VIDEO_BUILD_DIR" -j "$BUILD_JOBS" | tee -a "$REPORT"
+    "$CTEST_BIN" --test-dir "$VIDEO_BUILD_DIR" --output-on-failure | tee -a "$REPORT"
+    if [[ "${RUN_RTSP_TESTS:-0}" == "1" ]]; then
+        python3 -B "$ROOT/tests/video/rtsp_loopback_integration.py" \
+            --probe "$VIDEO_BUILD_DIR/rtsp_decoder_probe" \
+            --output-dir "$LOG_DIR/rtsp_$(date +%Y%m%d_%H%M%S)" | tee -a "$REPORT"
+    fi
+fi
 log "PASS: host build and mock tests completed; ROS2/hardware acceptance remains separate. report=$REPORT"

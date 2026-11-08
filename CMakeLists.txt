@@ -8,41 +8,25 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 全局禁用优化，绕过 GCC 13.1 汇编器 Segmentation fault
-add_compile_options(-O0)
+# The application embeds Quick3D QML and requires Qt6; Qt5 remains supported
+# only by the independent communication test project.
+find_package(Qt6 6.5 REQUIRED COMPONENTS
+    Core Widgets Network Qml Quick QuickWidgets Quick3D OpenGL OpenGLWidgets)
+find_package(Qt6 QUIET COMPONENTS Charts)
+set(QT_VERSION 6)
 
-# ============================================
-# Qt6 Modules - 灵活配置
-# ============================================
-# 首先尝试查找Qt6，如果失败则尝试Qt5
-find_package(Qt6 QUIET COMPONENTS
-    Core
-    Widgets
-    Network
-    Qml
-    Quick           # <-- 确保添加
-    QuickWidgets    # <-- 用于在 Widget 中嵌入 QML
-)
+# Keep the historical MinGW GCC 13.1 assembler workaround local to that toolchain.
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL "13.1"
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "13.2")
+    add_compile_options(-O0)
+endif()
 
-if(NOT Qt6_FOUND)
-    message(STATUS "Qt6 not found, trying Qt5...")
-    find_package(Qt5 REQUIRED COMPONENTS
-        Core
-        Widgets
-        Network
-    )
-    set(QT_VERSION 5)
-else()
-    message(STATUS "Qt6 found successfully")
-    # 尝试添加可选的Qt6模块
-    find_package(Qt6 QUIET COMPONENTS Qml)
-    find_package(Qt6 QUIET COMPONENTS Quick)
-    find_package(Qt6 QUIET COMPONENTS QuickWidgets)
-    find_package(Qt6 QUIET COMPONENTS Quick3D)
-    find_package(Qt6 QUIET COMPONENTS OpenGL)
-    find_package(Qt6 QUIET COMPONENTS OpenGLWidgets)
-    find_package(Qt6 QUIET COMPONENTS Charts)
-    set(QT_VERSION 6)
+get_filename_component(HOST_REFERENCE_DIR "${CMAKE_SOURCE_DIR}/ros2_ws_car" REALPATH)
+get_filename_component(HOST_BINARY_DIR "${CMAKE_BINARY_DIR}" REALPATH)
+string(FIND "${HOST_BINARY_DIR}/" "${HOST_REFERENCE_DIR}/" HOST_IN_REFERENCE)
+if(HOST_BINARY_DIR STREQUAL CMAKE_SOURCE_DIR OR HOST_IN_REFERENCE EQUAL 0)
+    message(FATAL_ERROR "Build outside the source root and read-only ros2_ws_car reference tree")
 endif()
 
 # ============================================
@@ -129,10 +113,6 @@ qt_add_executable(hostcomputer
     resources/resources.qrc
 )
 
-# 解决 GCC 13.1 汇编器内部错误 (Segmentation fault)
-# 对 mainwindow.cpp 禁用优化以绕过 as.exe 的 bug
-set_source_files_properties(mainwindow.cpp PROPERTIES COMPILE_FLAGS "-O0")
-
 # ============================================
 # 链接各层模块
 # ============================================
@@ -187,3 +167,9 @@ if(TARGET Qt6::Quick)
 endif()
 
 qt_finalize_executable(hostcomputer)
+
+# Deployment is opt-in: ordinary builds do not copy developer runtimes.
+option(HOST_DEPLOY_RUNTIME "Install a Qt/QML runtime bundle" OFF)
+if(HOST_DEPLOY_RUNTIME)
+    include(cmake/HostDeployment.cmake)
+endif()

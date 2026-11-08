@@ -26,8 +26,6 @@ set(HEADERS
 # 创建静态库
 add_library(utils_layer STATIC ${SOURCES} ${HEADERS})
 
-# 绕过 GCC 13.1 汇编器内部错误
-set_source_files_properties(ErrorHandler.cpp PROPERTIES COMPILE_FLAGS "-O0 -g1")
 
 # 链接Qt6库
 target_link_libraries(utils_layer PUBLIC Qt6::Core)

@@ -20,7 +20,7 @@ def ffmpeg_name() -> str:
     return "ffmpeg.exe" if platform.system().lower().startswith("win") else "ffmpeg"
 
 
-def find_ffmpeg(app_dir: Path, explicit_path: str = "") -> Path:
+def find_ffmpeg(app_dir: Path, explicit_path: str = ""):
     candidates = []
     if explicit_path:
         candidates.append(Path(explicit_path))
@@ -30,11 +30,11 @@ def find_ffmpeg(app_dir: Path, explicit_path: str = "") -> Path:
     candidates.append(app_dir / ffmpeg_name())
 
     for candidate in candidates:
-        if candidate.is_file():
+        if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate
 
     path_hit = shutil.which(ffmpeg_name()) or shutil.which("ffmpeg")
-    return Path(path_hit) if path_hit else Path()
+    return Path(path_hit) if path_hit else None
 
 
 def run_version(binary: Path) -> str:

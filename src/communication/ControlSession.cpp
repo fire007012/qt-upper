@@ -133,10 +133,7 @@ void ControlSession::poll()
     for (const auto &id : expired) {
         expireRequest(id, m_pending.take(id));
     }
-    if (!tokenValid() && !m_tokenExpired) { m_tokenExpired = true; revoke("TOKEN_EXPIRED"); }
-    if (m_lastStatus >= 0 && time - m_lastStatus >= 500 && !m_statusExpired) {
-        m_statusExpired = true; m_permitted = false; revoke("STATUS_EXPIRED");
-    }
+    expireValidity();
     if ((m_lastFresh >= 0 && time - m_lastFresh >= 1500) || (m_lastStatus >= 0 && time - m_lastStatus >= 1000)) {
         fail(QStringLiteral("控制租约/实际状态查询失效，正在建立新会话。")); return;
     }
@@ -150,6 +147,13 @@ void ControlSession::poll()
         m_nextStatus = time + 200; send("control_status");
     }
     if (time >= m_nextOperation && !pendingType("operation_query")) { m_nextOperation = time + 500; queryNextOperation(); }
+}
+void ControlSession::expireValidity()
+{
+    if (!tokenValid() && !m_tokenExpired) { m_tokenExpired = true; revoke("TOKEN_EXPIRED"); }
+    if (m_lastStatus >= 0 && now() - m_lastStatus >= 500 && !m_statusExpired) {
+        m_statusExpired = true; m_permitted = false; revoke("STATUS_EXPIRED");
+    }
 }
 bool ControlSession::input(const OperatorInputState &state)
 {
@@ -336,6 +340,9 @@ void ControlSession::receive(const QJsonObject &message)
     }
     const auto id = message["request_id"].toString();
     if (!m_pending.contains(id)) return; // Late/old connection ACKs cannot grant authorization.
+    // A readyRead callback can precede a delayed timer after an event-loop stall.
+    // Renewed tokens/status must not conceal an interval of expired authority.
+    if (negotiated()) expireValidity();
     const auto request = m_pending.value(id);
     if ((request.seq == 0 ? !message["seq"].isNull() : message["seq"] != QJsonValue(static_cast<qint64>(request.seq)))) {
         fail(QStringLiteral("控制v2响应序号不匹配。"), false); return;
@@ -377,8 +384,11 @@ void ControlSession::receive(const QJsonObject &message)
                 // Replies from the previous epoch remain correlated but cannot alter the new session.
             }
             const bool revoked = (!result["authorized"].toBool() && m_motionAuthorized)
-                || (!result["motion_permitted"].toBool() && m_motionAuthorized) || result["emergency_active"].toBool();
-            if (revoked && (m_motionAuthorized || m_operationsAuthorized)) revoke("SERVER_REVOKED");
+                || (!result["motion_permitted"].toBool() && m_permitted)
+                || (result["emergency_active"].toBool() && !m_emergency);
+            // Invalidate pending grants as well as grants already acknowledged.
+            // Otherwise a denial followed by recovery can revive a delayed grant.
+            if (revoked) revoke("SERVER_REVOKED");
             m_status = result; m_lastStatus = now(); m_statusExpired = false;
             m_permitted = result["motion_permitted"].toBool(); m_emergency = result["emergency_active"].toBool();
             emit event({{"type", "control_status"}, {"status", result}});

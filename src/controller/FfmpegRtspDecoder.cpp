@@ -53,11 +53,12 @@ void FfmpegRtspDecoder::start(const QString &rtspUrl, int width, int height, int
         return;
     }
 
-    const qint64 frameBytes = static_cast<qint64>(width) * height * kBytesPerPixel;
-    if (frameBytes <= 0 || frameBytes > kMaxFrameBytes) {
+    const qint64 pixels = static_cast<qint64>(width) * height;
+    if (pixels > kMaxFrameBytes / kBytesPerPixel) {
         emit failed(QStringLiteral("视频帧过大: %1x%2").arg(width).arg(height));
         return;
     }
+    const qint64 frameBytes = pixels * kBytesPerPixel;
 
     m_width = width;
     m_height = height;
@@ -72,18 +73,22 @@ void FfmpegRtspDecoder::start(const QString &rtspUrl, int width, int height, int
 
     const QString program = ffmpegProgram();
     const QStringList arguments = ffmpegArguments(rtspUrl);
-    m_workerThread = QThread::create([this, program, arguments, width, height, frameBytes = m_frameBytes]() {
-        decoderLoop(program, arguments, width, height, frameBytes);
+    const auto generation = m_generation.load();
+    m_workerThread = QThread::create([this, program, arguments, width, height, frameBytes = m_frameBytes, generation]() {
+        decoderLoop(program, arguments, width, height, frameBytes, generation);
     });
     m_workerThread->start();
 }
 
 void FfmpegRtspDecoder::stop()
 {
+    ++m_generation;
     m_stopRequested.store(true);
     if (m_workerThread) {
         m_workerThread->requestInterruption();
-        m_workerThread->wait(2000);
+        // Never destroy a running QThread. The worker uses bounded process waits;
+        // scheduler delays may still exceed the normal two-second join budget.
+        if (!m_workerThread->wait(2000)) m_workerThread->wait();
         delete m_workerThread;
         m_workerThread = nullptr;
     }
@@ -182,20 +187,27 @@ QStringList FfmpegRtspDecoder::ffmpegArguments(const QString &rtspUrl) const
 }
 
 void FfmpegRtspDecoder::decoderLoop(const QString &program, const QStringList &arguments,
-                                    int width, int height, int frameBytes)
+                                    int width, int height, int frameBytes, quint64 generation)
 {
     QProcess process;
     process.setProcessChannelMode(QProcess::SeparateChannels);
     process.start(program, arguments, QIODevice::ReadOnly);
 
-    if (!process.waitForStarted(3000)) {
+    QElapsedTimer startup; startup.start();
+    bool processStarted = false;
+    while (!m_stopRequested.load() && startup.elapsed() < 3000) {
+        if (process.waitForStarted(20)) { processStarted = true; break; }
+        if (process.state() == QProcess::NotRunning) break;
+    }
+    if (!processStarted) {
+        if (process.state() != QProcess::NotRunning) { process.kill(); process.waitForFinished(800); }
         if (!m_stopRequested.load()) {
-            emit failed(QStringLiteral("无法启动 ffmpeg：请将 ffmpeg 放在上位机可执行文件同目录，或设置 HOSTCOMPUTER_FFMPEG_PATH"));
+            postStatus(false, QStringLiteral("无法启动 ffmpeg：请将 ffmpeg 放在上位机可执行文件同目录，或设置 HOSTCOMPUTER_FFMPEG_PATH"), generation);
         }
         return;
     }
 
-    emit started();
+    postStatus(true, {}, generation);
 
     QByteArray stdoutBuffer;
     QString stderrBuffer;
@@ -239,11 +251,21 @@ void FfmpegRtspDecoder::decoderLoop(const QString &program, const QStringList &a
         const QString status = process.exitStatus() == QProcess::CrashExit
             ? QStringLiteral("崩溃")
             : QStringLiteral("退出");
-        emit failed(QStringLiteral("ffmpeg %1，code=%2%3")
+        postStatus(false, QStringLiteral("ffmpeg %1，code=%2%3")
                         .arg(status)
                         .arg(process.exitCode())
-                        .arg(stderrTail(stderrBuffer)));
+                        .arg(stderrTail(stderrBuffer)), generation);
     }
+}
+
+void FfmpegRtspDecoder::postStatus(bool startedEvent, const QString &message, quint64 generation)
+{
+    // Check on delivery, not on emission: the UI may have stopped or replaced
+    // this stream while the worker's callback was waiting in the event queue.
+    QMetaObject::invokeMethod(this, [this, startedEvent, message, generation] {
+        if (m_generation.load() != generation) return;
+        if (startedEvent) emit started(); else emit failed(message);
+    }, Qt::QueuedConnection);
 }
 
 void FfmpegRtspDecoder::storeLatestFrame(const QByteArray &rawFrame, int width, int height)

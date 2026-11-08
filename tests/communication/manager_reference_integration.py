@@ -21,7 +21,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--manager', type=Path, required=True)
     parser.add_argument('--probe', type=Path, required=True)
+    parser.add_argument('--cycles', type=int, default=2)
     args = parser.parse_args()
+    if not 1 <= args.cycles <= 1000:
+        parser.error('cycles must be between 1 and 1000')
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(args.manager.resolve().parent))
     spec = importlib.util.spec_from_file_location('reference_manager', args.manager.resolve())
@@ -73,16 +76,19 @@ def main():
         thread.start()
         try:
             env = dict(os.environ, HOST_MANAGER_PROBE_TOKEN=token,
+                       HOST_MANAGER_PROBE_CYCLES=str(args.cycles),
                        HOST_MANAGER_PROBE_PORT=str(server.server_address[1]),
                        HOST_MANAGER_PROBE_EXPECTED_ENDPOINTS=str(
-                           2 if manager.config['control_endpoint']['protocol_version'] in (1, 2) else 0))
-            result = subprocess.run([str(args.probe.resolve())], env=env, timeout=35, check=False)
+                           args.cycles if manager.config['control_endpoint']['protocol_version'] in (1, 2) else 0))
+            result = subprocess.run([str(args.probe.resolve())], env=env, timeout=max(35,args.cycles*10+5), check=False)
             if result.returncode:
                 raise RuntimeError(f'Qt management probe failed: {result.returncode}')
-            assert backend.started == ['core', 'bridge'] * 2, backend.started
-            assert backend.stopped == ['halt', 'bridge', 'core'] * 2, backend.stopped
+            assert backend.started == ['core', 'bridge'] * args.cycles, backend.started
+            assert backend.stopped == ['halt', 'bridge', 'core'] * args.cycles, backend.stopped
             assert not manager.data['resources']
             print('reference manager + Qt RuntimeService: PASS (injected backend, no ROS/hardware)')
+            print(json.dumps(dict(scope='qt_manager_injected_backend', passed=True, cycles=args.cycles,
+                                  resources_remaining=0, physical_acceptance=False)), flush=True)
         finally:
             manager.closed.set()
             server.shutdown()

@@ -57,6 +57,7 @@ private:
     QString send(const QString &type, QJsonObject fields = {}, bool fresh = false,
                  bool neutral = false, const QString &requestId = {});
     void revoke(const QString &reason, bool clearToken = true);
+    void expireValidity();
     void fail(const QString &message, bool retry = true);
     bool acceptToken(const QJsonObject &value, const Pending &request);
     void rejected(const Pending &request, const QString &id, const QString &code);

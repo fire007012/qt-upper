@@ -323,7 +323,7 @@ void MainWindow::setupDisplayLayout()
                              QStringLiteral("arm"), QStringLiteral("机械臂"));
 
     connect(m_controlPanel, &ControlPanelWidget::gamepadConnectRequested,
-            this, &MainWindow::on_btn_gamepad_connect_clicked);
+            this, &MainWindow::toggleGamepadConnection);
     connect(m_controlPanel, &ControlPanelWidget::emergencyStopRequested,
             this, [this]() {
         triggerEmergencyStop(QStringLiteral("control_panel"));
@@ -1091,7 +1091,7 @@ void MainWindow::triggerEmergencyStop(const QString &source)
     });
 }
 
-void MainWindow::on_btn_gamepad_connect_clicked()
+void MainWindow::toggleGamepadConnection()
 {
     if (m_handleKey && m_handleKey->isConnected()) {
         // 已连接 → 停止轮询（断开）

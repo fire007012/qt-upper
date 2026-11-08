@@ -1,6 +1,6 @@
 # Qt 控制 v2 与诊断使用
 
-日期：2026-11-08。上位机构建标识 `host-ros2-v2-config-1`，匹配下位机文档40/41、参考构建系列 `robot24-p0-config-2`。管理连接仍为 v1；运动、授权和生命周期操作使用控制 v2。兼容声明见 [compatibility.json](../deploy/compatibility.json)。
+日期：2026-11-08。上位机构建标识 `host-ros2-v2-config-2`，匹配下位机文档40/41、参考构建系列 `robot24-p0-config-2`。管理连接仍为 v1；运动、授权和生命周期操作使用控制 v2。兼容声明见 [compatibility.json](../deploy/compatibility.json)。
 
 ## 连接与授权
 
@@ -46,4 +46,4 @@ python3 -B scripts/check_host_release.py \
 
 该检查不启动GUI、不部署下位机。Qt平台插件、QML/Quick3D、SDL手柄及FFmpeg打包需在干净目标系统验收；Windows须用匹配Qt6工具链构建并运行windeployqt（包含resources/qml）、部署SDL/FFmpeg后复测。当前Linux本机构建不能作为Windows验证或干净机器发布验收。
 
-现场还须按计划核查物理断网/半开、跨机器时钟跳变、实际runtime许可与输出归零、ROS2与视频隔离、systemd冷启动，以及自然时间24h。100轮程序主动断开/重连只证明该软件场景，不能替代100轮物理断网。
+现场还须按计划核查物理断网/半开、跨机器时钟跳变、实际runtime许可与输出归零、ROS2与视频隔离、systemd冷启动。100轮程序主动断开/重连只证明该软件场景，不能替代100轮物理断网。

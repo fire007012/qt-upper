@@ -60,8 +60,6 @@ set(CONTROLLER_SOURCES
 add_library(controller_layer STATIC ${CONTROLLER_SOURCES})
 target_compile_definitions(controller_layer PRIVATE HOST_REFERENCE_ROOT="${CMAKE_SOURCE_DIR}/ros2_ws_car")
 
-# 绕过 GCC 13.1 汇编器内部错误 (Segmentation fault)
-set_source_files_properties(handlekey.cpp PROPERTIES COMPILE_FLAGS "-O0")
 
 # 链接依赖
 target_link_libraries(controller_layer PUBLIC

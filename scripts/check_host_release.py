@@ -9,6 +9,7 @@ import platform
 import shutil
 import subprocess
 import tempfile
+from check_host_runtime import find_ffmpeg, run_version
 
 
 def main():
@@ -35,14 +36,19 @@ def main():
         checks.append(dict(name='linked_libraries', passed=result.returncode == 0 and 'not found' not in result.stdout))
     else:
         checks.append(dict(name='linked_libraries', passed=False, reason='run platform packaging checks separately'))
-    ffmpeg = shutil.which('ffmpeg')
-    checks.append(dict(name='ffmpeg_on_path', passed=ffmpeg is not None))
+    ffmpeg = find_ffmpeg(binary.parent)
+    try:
+        ffmpeg_version = run_version(ffmpeg) if ffmpeg else None
+        checks.append(dict(name='ffmpeg_executable', passed=bool(ffmpeg_version)))
+    except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+        ffmpeg_version = None
+        checks.append(dict(name='ffmpeg_executable', passed=False, reason=str(error)))
     report = dict(format_version=1, version=version, platform=platform.platform(),
                   binary=str(binary), binary_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
                   compatibility=compatibility, checks=checks, linked_libraries=dependencies,
-                  ffmpeg_path=ffmpeg, scope='host_local_runtime_only',
+                  ffmpeg_path=str(ffmpeg) if ffmpeg else None, ffmpeg_version=ffmpeg_version, scope='host_local_runtime_only',
                   gui_plugins_validated=False, clean_machine_validated=False,
-                  physical_acceptance=False, stability_24h_validated=False)
+                  physical_acceptance=False)
     # Atomic replace; failures leave existing evidence intact.
     with tempfile.NamedTemporaryFile(mode='w', dir=output.parent, prefix='.host-release-', delete=False) as file:
         temporary = Path(file.name)

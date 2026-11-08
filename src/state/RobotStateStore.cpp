@@ -76,7 +76,7 @@ bool RobotStateStore::exportFile(const QString &path, const QJsonObject &context
     const QFileInfo file(path);
     const auto parent = QFileInfo(file.absolutePath()).canonicalFilePath();
     const auto root = QFileInfo(protectedRoot).canonicalFilePath();
-    if (parent.isEmpty() || (!root.isEmpty() && (parent == root || parent.startsWith(root + '/')))) return false;
+    if (file.isSymLink() || parent.isEmpty() || (!root.isEmpty() && (parent == root || parent.startsWith(root + '/')))) return false;
     QSaveFile out(path); if (!out.open(QIODevice::WriteOnly)) return false;
     const auto bytes = QJsonDocument(diagnosticBundle(context)).toJson(QJsonDocument::Indented);
     return out.write(bytes) == bytes.size() && out.commit();

@@ -73,7 +73,7 @@ private slots:
     void on_btn_clear_errors_clicked();
     void on_btn_emergency_stop_clicked();
     void on_btn_clear_emergency_clicked();
-    void on_btn_gamepad_connect_clicked();
+    void toggleGamepadConnection();
 
     void updateSystemStatus();  // 定时更新系统状态
 

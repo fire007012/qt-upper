@@ -9,6 +9,7 @@ Qt 通过 TCP/JSON 连接下位机 ROS2 `host_bridge`（默认9090）；独立�
 - [视频联调](docs/ROS2视频联调说明.md) / [手柄键盘操作](docs/手柄键盘控制说明.md)
 - [重构计划](docs/上位机ROS2适配与可靠性重构计划.md) / [实施记录与验收边界](docs/上位机重构实施记录.md)
 - [独立通信测试](tests/communication/README.md)
+- [发布打包、配置迁移与Linux验收](docs/上位机发布与验收.md)
 
 本机 Qt6.12 环境的一次性构建与回归入口：
 

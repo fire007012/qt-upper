@@ -14,7 +14,7 @@ ctest --test-dir /tmp/hostcomputer-communication-tests --output-on-failure
 
 覆盖正常心跳与 ACK、首次/运行中心跳丢失、无关 ACK、首次连接拒绝、超过五次失败后的持续恢复、主动取消重试、关键 ACK 类型匹配与超时、残留半帧、旧连接心跳、输出限额、重连后的中立输入与显式授权、急停、输入拒收撤权、ACK 表满时的急停请求以及不兼容协议版本。
 
-这些测试证明客户端与测试服务之间的行为；不代替 ROS2 桥接联调、物理断网、设备输出归零或 24h 现场稳定性验收。
+这些测试证明客户端与测试服务之间的行为；不代替 ROS2 桥接联调、物理断网、设备输出归零等实机验收。
 
 ## 管理 v1 与界面测试（2026-11-08）
 
@@ -60,7 +60,7 @@ HOST_BUILD_WIDGET_TESTS=ON bash scripts/run_all_tests.sh
 
 默认 BUILD_DIR=/tmp/hostcomputer-build-smoke、COMMUNICATION_BUILD_DIR=/tmp/hostcomputer-communication-tests、LOG_DIR=/tmp/hostcomputer-test-logs；可以分别指定外部目录。脚本会拒绝把这些产物写入下位机只读参考目录或历史归档。完整应用要求 Qt6；仅运行通信回归仍可使用上面的独立 CMake 命令。Qt 客户端现名为 RobotTcpClient，构建和测试已统一使用新文件名。
 
-原“进程存活+UDP乱包”流程已退出统一入口：当前控制传输是 TCP/JSON，进程存活不能替代业务稳定性或实际运动归零验收。需要界面进程冒烟时显式设置 RUN_APP_SMOKE=1；真实网络、ROS2、视频与24h验收另行执行。
+原“进程存活+UDP乱包”流程已退出统一入口：当前控制传输是 TCP/JSON，进程存活不能替代业务稳定性或实际运动归零验收。需要界面进程冒烟时显式设置 RUN_APP_SMOKE=1；真实网络、ROS2与视频验收另行执行。
 
 ## 配置事务 v1（文档41）
 
@@ -100,6 +100,13 @@ python3 -B tests/communication/control_reference_integration.py \
 
 可用 `--case epochAndEmergency|acceptedResponseLost|slowBackendAndIndependentEmergency|repeatedReconnectsNeverRestoreAuthorization|multipleClientsAndInputWatchdog` 单独复现。主动断开后等待150ms供真实接收/写线程退出，再开始下一轮；立即重连可能遇到旧连接尚未释放，客户端须自动恢复，轮次不等于TCP尝试数。输入已有在途帧时重试采样，不能把正常的发送限流当断线或业务失败。该组通常需数分钟，Python与QtTest总时限均按轮数设置；失败不会跳过断言或改用伪参考实现。
 
-这些契约只验证模拟输出。物理断网、真实ROS2/设备、跨机器校时、完整视频隔离及自然时间24h必须另行验收。UI进程8秒存活也仅证明创建及事件循环，不证明Quick3D、手柄或视频。
+这些契约只验证模拟输出。物理断网、真实ROS2/设备、跨机器校时及完整视频隔离必须另行验收。UI进程8秒存活也仅证明创建及事件循环，不证明Quick3D、手柄或视频。
 
 本地发布证据：`python3 -B scripts/check_host_release.py --binary /tmp/hostcomputer-qt6-build/hostcomputer --output /tmp/hostcomputer-release-check.json`。脚本检查构建标识/Qt6、本机动态依赖和FFmpeg并记录二进制SHA256，不将本机环境检查等同干净机器/Windows发布验收。
+
+## 发布与Linux联调
+
+
+Linux实际ROS2 DDS mock、仅接口类型的临时覆盖层、真实H264/RTSP解码、Wayland渲染读回及管理20轮契约的命令也见该说明。ROS2测试需显式给定参考路径，不属于默认无ROS通信构建。Windows现为后续可选项，不阻塞Linux验证。
+
+授权单测补充事件循环延迟时新令牌不能掩盖过期间隔、许可失效再恢复不能复活在途授权，以及诊断导出拒绝符号链接目标的回归。发布工具独立验证：`python3 -B -m unittest discover -s tests/tools -v`，无ROS、无回环监听。

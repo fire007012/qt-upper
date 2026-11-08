@@ -134,6 +134,28 @@ private slots:
         peer.reply(peer.last("control_status"),status); peer.reply(authorization,{{"authorized",true}});
         QVERIFY(!peer.session.motionAuthorized());
     }
+    void runtimeRecoveryCannotReviveGrantFromBeforeDenial() {
+        SessionPeer peer; peer.begin(); peer.neutral(); QVERIFY(peer.session.authorizeMotion());
+        const auto authorization=peer.last("authorize");
+        peer.time+=100; peer.session.poll(); peer.reply(peer.last("freshness_request"),peer.token());
+        peer.time+=100; peer.session.poll(); auto denied=peer.status(); denied["motion_permitted"]=false;
+        peer.reply(peer.last("control_status"),denied);
+        peer.reply(peer.last("freshness_request"),peer.token()); peer.neutral();
+        peer.time+=100; peer.session.poll(); peer.reply(peer.last("freshness_request"),peer.token());
+        peer.time+=100; peer.session.poll(); peer.reply(peer.last("freshness_request"),peer.token());
+        peer.reply(peer.last("control_status"),peer.status()); peer.neutral();
+        peer.reply(authorization,{{"authorized",true}});
+        QVERIFY(peer.session.ready()); QVERIFY(!peer.session.motionAuthorized());
+    }
+    void tokenRenewalBeforeDelayedTimerStillRevokesAuthority() {
+        SessionPeer peer; peer.begin(); peer.arm(); QVERIFY(peer.session.authorizeMotion());
+        peer.reply(peer.last("authorize"),{{"authorized",true}});
+        peer.time+=100; peer.session.poll(); const auto refresh=peer.last("freshness_request");
+        peer.time+=201; // Old token expired; no timer has run yet.
+        peer.reply(refresh,peer.token());
+        QVERIFY(peer.session.ready()); QVERIFY(!peer.session.motionAuthorized()); QVERIFY(!peer.session.operationsAuthorized());
+        peer.neutral(); QVERIFY(peer.session.authorizeMotion());
+    }
     void lateAcceptanceIsDurablyUnknownEvenBeforeTimerPoll() {
         SessionPeer peer; peer.begin(); peer.arm(); QVERIFY(peer.session.command("init",{}));
         const auto request=peer.last("system_command"); peer.time+=1001;
@@ -166,6 +188,13 @@ private slots:
         QCOMPARE(store.diagnosticBundle()["events"].toArray().size(),256);
         store.invalidate(); QVERIFY(store.snapshot()["topics"].toObject()["co2"].toObject()["value"].isNull());
         QVERIFY(!store.exportFile(directory.filePath("protected.json"),{},directory.path()));
+        const auto target=directory.filePath("reference.json");
+        QFile original(target); QVERIFY(original.open(QIODevice::WriteOnly)); original.write("read-only-reference"); original.close();
+        const auto link=directory.filePath("linked.json");
+        if (QFile::link(target,link) && QFileInfo(link).isSymLink()) {
+            QVERIFY(!store.exportFile(link));
+            QVERIFY(original.open(QIODevice::ReadOnly)); QCOMPARE(original.readAll(),QByteArray("read-only-reference"));
+        }
     }
 };
 QTEST_GUILESS_MAIN(ControlSessionTest)
