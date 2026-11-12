@@ -30,6 +30,8 @@ public:
     void pause();
     bool command(const QString &command, QJsonObject params);
     bool recoverRequest(const QString &requestId);
+    bool canAcknowledgeUnknown(const QString &id) const;
+    bool acknowledgeUnknown(const QString &id);
     bool ready() const;
     bool motionAuthorized() const { return m_motionAuthorized; }
     bool operationsAuthorized() const { return m_operationsAuthorized; }
@@ -59,6 +61,8 @@ private:
     void advancePresets();
     void stopPresetFlow(const QString &reason);
     bool busy() const;
+    bool hasBlockingUnknown() const;
+    bool stoppedPresets(const QJsonArray &presets) const;
     bool acceptSelection(const QJsonObject &result);
     qint64 now() const;
     bool tokenValid() const;
@@ -78,7 +82,7 @@ private:
     void saveRecord(const QString &id, const QJsonObject &record);
     void queryNextOperation();
     void notify(const QString &code, const QString &message = {});
-    bool m_presetAware = false, m_flow = false, m_flowStart = false;
+    bool m_presetAware = false, m_flow = false, m_flowStart = false, m_flowIssuing = false;
     QJsonArray m_desiredPresets{QStringLiteral("flippers"), QStringLiteral("base"), QStringLiteral("arm")};
     QJsonArray m_selectedPresets, m_selectedGroups, m_flowTarget;
     QString m_flowRequest, m_flowPhase;
@@ -87,7 +91,7 @@ private:
     std::function<qint64()> m_now;
     QTimer m_timer;
     QString m_role = QStringLiteral("control");
-    QString m_robot, m_scope, m_session, m_epoch, m_token, m_build;
+    QString m_robot, m_scope, m_session, m_epoch, m_token, m_build, m_endpoint, m_connectionId;
     quint64 m_sequence = 0;
     quint64 m_authorizationGeneration = 0;
     bool m_journalHealthy = true;
@@ -97,6 +101,7 @@ private:
     bool m_physicalNeutral = false, m_permitted = false, m_emergency = true;
     bool m_tokenExpired = false, m_statusExpired = false;
     QHash<QString, Pending> m_pending;
+    QHash<QString, qint64> m_unknownQueries;
     QJsonObject m_records, m_status;
     QStringList m_operationOrder;
     int m_operationCursor = 0;

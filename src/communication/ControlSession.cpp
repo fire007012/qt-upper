@@ -3,6 +3,7 @@
 #include <QDateTime>
 #include <QJsonDocument>
 #include <QSettings>
+#include <QScopedValueRollback>
 #include <QUuid>
 #include <cmath>
 
@@ -57,13 +58,13 @@ void ControlSession::reset()
         }
     }
     if (!m_scope.isEmpty()) persist();
-    m_pending.clear(); m_session.clear(); m_epoch.clear(); m_status = {};
+    m_pending.clear(); m_unknownQueries.clear(); m_session.clear(); m_epoch.clear(); m_status = {}; m_connectionId.clear();
     m_lastStatus = m_lastFresh = -1; m_permitted = false; m_emergency = true;
     revoke("DISCONNECTED");
 }
 void ControlSession::begin(const QString &robotId, const QString &endpoint, bool motionPresets, const QString &role)
 {
-    reset(); m_role = role; m_robot = robotId; m_sequence = 0; m_records = {}; m_operationOrder.clear(); m_operationCursor = 0;
+    reset(); m_endpoint = endpoint; m_connectionId = QUuid::createUuid().toString(QUuid::WithoutBraces); m_role = role; m_robot = robotId; m_sequence = 0; m_records = {}; m_operationOrder.clear(); m_operationCursor = 0;
     m_scope = QString::fromLatin1(QCryptographicHash::hash((endpoint + '/' + robotId).toUtf8(), QCryptographicHash::Sha256).toHex());
     if (robotId.isEmpty()) { fail(QStringLiteral("必须填写机器人身份才能协商控制v2。"), false); return; }
     if (role != "control" && role != "monitor") { fail(QStringLiteral("控制角色无效。"), false); return; }
@@ -121,7 +122,7 @@ void ControlSession::expireRequest(const QString &id, const Pending &request)
 {
     if (request.type == "select_presets") { if (m_flow) stopPresetFlow("SELECTION_RESULT_UNKNOWN"); revoke("SELECTION_RESULT_UNKNOWN"); m_nextStatus = 0; }
     if (request.type == "system_command" || request.type == "camera_stream_request") {
-        if (m_flow) stopPresetFlow("RESULT_UNKNOWN");
+        if (m_flow && id == m_flowRequest) stopPresetFlow("RESULT_UNKNOWN");
         auto record = m_records[id].toObject(); record["state"] = "result_unknown"; record["error"] = "RESPONSE_TIMEOUT";
         saveRecord(id, record); notify("RESULT_UNKNOWN", QStringLiteral("操作接受响应超时；不代表未执行，请查询或用原ID恢复。"));
         revoke("RESULT_UNKNOWN");
@@ -179,7 +180,7 @@ bool ControlSession::input(const OperatorInputState &state)
         auto keys = payload["keyboard"].toObject()["pressed_keys"].toArray();
         auto gamepad = payload["gamepad"].toObject(); auto axes = gamepad["axes"].toObject(); auto buttons = gamepad["buttons"].toObject();
         QStringList allowed;
-        if (state.mode == "arm" && m_selectedPresets.contains("arm")) allowed = {"u","o","a","d","w","s","q","e","k","i","j","l","f","h"};
+        if (state.mode == "arm" && m_selectedPresets.contains("arm")) allowed = QStringList{"u","o","a","d","w","s","q","e","k","i","j","l","f","h"};
         else if (state.mode == "vehicle") {
             if (m_selectedPresets.contains("base")) allowed += QStringList{"w","a","s","d"};
             else for (const auto &axis : {"left_x","left_y","right_x"}) axes[axis] = 0;
@@ -198,7 +199,7 @@ bool ControlSession::input(const OperatorInputState &state)
 }
 bool ControlSession::authorizeMotion()
 {
-    if (!neutralReady() || busy() || (m_presetAware && (m_selectedPresets.isEmpty() || m_desiredPresets.isEmpty())) || !m_permitted || m_emergency || pendingType("authorize")) return false;
+    if (!neutralReady() || busy() || hasBlockingUnknown() || (m_presetAware && (m_selectedPresets.isEmpty() || m_desiredPresets.isEmpty())) || !m_permitted || m_emergency || pendingType("authorize")) return false;
     return !send("authorize", {}, true).isEmpty();
 }
 bool ControlSession::authorizeOperations()
@@ -257,16 +258,8 @@ bool ControlSession::selectPresets(const QJsonArray &presets)
 {
     if (!m_presetAware || !validPresets(presets) || !neutralReady() || busy()) return false;
     if (!m_status["runtime_fresh"].toBool()) return false;
-    for (const auto &id : m_selectedPresets) if (!presets.contains(id)) {
-        const auto preset = m_status["presets"].toObject()[id.toString()].toObject();
-        for (const auto &g : groupsFor(QJsonArray{id})) {
-            const auto state = preset["states"].toObject()[g.toString()].toString();
-            const auto diagnostic = preset["diagnostics"].toObject()[g.toString()].toObject();
-            if (!QStringList{"Stopped","Halted"}.contains(state) || !diagnostic["state"].isDouble()
-                || (diagnostic["state"].toInt(-1) != 0 && diagnostic["state"].toInt(-1) != 3)) {
-                notify("HALT_REMOVED_PRESETS", QStringLiteral("取消前需停止该预设全部底层组，并取得新鲜停止反馈和诊断。")); return false;
-            }
-        }
+    for (const auto &id : m_selectedPresets) if (!presets.contains(id) && !stoppedPresets(QJsonArray{id})) {
+        notify("HALT_REMOVED_PRESETS", QStringLiteral("取消前需停止该预设全部底层组，并取得新鲜停止反馈和诊断。")); return false;
     }
     revoke("PRESETS_CHANGED", false);
     return !send("select_presets", {{"presets",presets}}, true).isEmpty();
@@ -279,16 +272,17 @@ void ControlSession::stopPresetFlow(const QString &reason)
 bool ControlSession::startPresets(const QJsonArray &presets)
 {
     if (m_role != "control" || !m_presetAware || !ready() || !validPresets(presets) || m_flow || busy() || m_emergency) return false;
-    for (const auto &value : m_records) if (value.toObject()["state"] == QJsonValue("result_unknown")) return false;
+    if (hasBlockingUnknown()) return false;
     m_desiredPresets = presets; m_flowTarget = presets; m_flow = true; m_flowStart = true;
     m_flowRequest.clear(); m_flowPhase = "等待中立输入 / 同步选择"; m_flowDeadline = now() + 60000;
     revoke("PRESET_START", false); emit inputSampleRequested(); emit changed(); return true;
 }
 bool ControlSession::haltPresets(const QJsonArray &presets)
 {
-    if (m_role != "control" || !m_presetAware || !ready() || !validPresets(presets) || m_flow || busy()) return false;
+    if (m_role != "control" || !m_presetAware || !m_active || !negotiated() || !validPresets(presets)) return false;
     for (const auto &id : presets) if (!m_selectedPresets.contains(id)) return false;
     m_flowTarget = presets; m_flow = true; m_flowStart = false;
+    m_flowStatusAfter = m_lastStatus; m_nextStatus = 0;
     m_flowRequest.clear(); m_flowPhase = "等待中立输入 / 停止"; m_flowDeadline = now() + 60000;
     revoke("PRESET_HALT", false); emit inputSampleRequested(); emit changed(); return true;
 }
@@ -315,9 +309,10 @@ void ControlSession::advancePresets()
             const auto state = m_status["presets"].toObject()[id.toString()].toObject()["states"].toObject()[g.toString()].toString();
             if (state != expected && !(action == "halt" && state == "Stopped")) return;
         }
+        if (action == "halt" && !stoppedPresets(requested)) return;
         m_flowRequest.clear();
     }
-    if (busy() || !neutralReady()) return;
+    if (busy() || !neutralReady() || (!m_flowStart && m_lastStatus <= m_flowStatusAfter)) return;
     QJsonArray removed;
     if (m_flowStart) for (const auto &id : m_selectedPresets) if (!m_flowTarget.contains(id)) removed.append(id);
     bool same = m_selectedPresets.size() == m_flowTarget.size();
@@ -334,8 +329,7 @@ void ControlSession::advancePresets()
         for (const auto &g : groupsFor(QJsonArray{id})) states.append(preset["states"].toObject()[g.toString()].toString("Unknown"));
         QString next;
         if (!m_flowStart || !removed.isEmpty()) {
-            bool stopped = true; for (const auto &state : states) stopped &= QStringList{"Stopped","Halted"}.contains(state);
-            if (!stopped) next = "halt";
+            if (!stoppedPresets(QJsonArray{id})) next = "halt";
         } else {
             bool allRunning = true; for (const auto &state : states) allRunning &= state == "Running";
             if (allRunning) continue;
@@ -352,6 +346,7 @@ void ControlSession::advancePresets()
     if (!action.isEmpty()) {
         if (!m_operationsAuthorized) { authorizeOperations(); return; }
         m_flowPhase = action; m_flowStatusAfter = m_lastStatus;
+        QScopedValueRollback<bool> issuing(m_flowIssuing, true);
         if (!command(action, {{"presets",subset}})) { stopPresetFlow("PRESET_COMMAND_BLOCKED"); return; }
         m_flowRequest = m_operationOrder.last(); return;
     }
@@ -410,6 +405,15 @@ void ControlSession::saveRecord(const QString &id, const QJsonObject &record)
 }
 bool ControlSession::command(const QString &command, QJsonObject params)
 {
+    if (!ControlProtocol::supportsSystemCommand(command)) { notify("COMMAND_UNAVAILABLE",ControlProtocol::unsupportedCommandReason(command)); return false; }
+    if (m_flow && !m_flowIssuing) {
+        if (command == "halt" || command == "disable") {
+            if (params.size() > (params.contains("presets") ? 1 : 0)) return false;
+            return haltPresets(params.contains("presets") ? params["presets"].toArray() : m_selectedPresets);
+        }
+        if (command == "shutdown") stopPresetFlow("OPERATOR_SHUTDOWN");
+        else { notify("OPERATIONS_BUSY", QStringLiteral("自动流程中仅允许停止；请先停止后再提交其他操作。")); return false; }
+    }
     if (m_presetAware) {
         if ((command == "set_control_mode" && params["mode"] == QJsonValue("arm")) || command.contains("arm_named_target")) {
             if (!m_selectedPresets.contains("arm")) { notify("PRESET_NOT_SELECTED", QStringLiteral("请先选择机械臂预设；遥控还需部署 enable_servo=true 并成功切换 arm 模式。")); return false; }
@@ -422,10 +426,10 @@ bool ControlSession::command(const QString &command, QJsonObject params)
         }
         if (busy()) { notify("OPERATIONS_BUSY"); return false; }
     }
-    if (!ready() || !m_journalHealthy || !m_operationsAuthorized || !QStringList{"init","enable","disable","halt","resume","recover","shutdown","set_control_mode","request_arm_named_targets","move_arm_named_target"}.contains(command)
+    if (!ready() || !m_journalHealthy || !m_operationsAuthorized || !ControlProtocol::supportsSystemCommand(command)
         || (command == "move_arm_named_target" && (!m_motionAuthorized || !m_permitted))) return false;
     for (auto it = m_records.begin(); it != m_records.end(); ++it) {
-        if (it.value().toObject()["state"] == QJsonValue("result_unknown")
+        if (it.value().toObject()["state"] == QJsonValue("result_unknown") && !it.value().toObject()["unknown_acknowledged"].toBool()
             && !QStringList{"halt","disable","shutdown"}.contains(command)) {
             notify("RESULT_UNKNOWN", QStringLiteral("请先核对未知操作结果，再提交新业务操作。")); return false;
         }
@@ -434,8 +438,8 @@ bool ControlSession::command(const QString &command, QJsonObject params)
     if (m_records.size() >= 64) {
         for (const auto &id : m_operationOrder) {
             const auto record = m_records[id].toObject();
-            if (record["state"] == QJsonValue("succeeded") || record["state"] == QJsonValue("failed")) {
-                m_records.remove(id); m_operationOrder.removeOne(id); break;
+            if (record["state"] == QJsonValue("succeeded") || record["state"] == QJsonValue("failed") || record["unknown_acknowledged"].toBool()) {
+                m_records.remove(id); m_unknownQueries.remove(id); m_operationOrder.removeOne(id); break;
             }
         }
         if (m_records.size() >= 64) { notify("LOCAL_CACHE_FULL"); return false; }
@@ -461,6 +465,54 @@ bool ControlSession::command(const QString &command, QJsonObject params)
     emit event({{"type", "control_operation"}, {"operation", ControlProtocol::redact(record)}});
     emit changed(); return true;
 }
+bool ControlSession::hasBlockingUnknown() const
+{
+    for (const auto &value : m_records) {
+        const auto op = value.toObject();
+        if (op["state"] == QJsonValue("result_unknown") && !op["unknown_acknowledged"].toBool()) return true;
+    }
+    return false;
+}
+bool ControlSession::stoppedPresets(const QJsonArray &presets) const
+{
+    if (!ready() || !m_presetAware || !m_status["runtime_fresh"].toBool() || !validPresets(presets)) return false;
+    for (const auto &id : presets) {
+        const auto preset = m_status["presets"].toObject()[id.toString()].toObject();
+        for (const auto &group : groupsFor(QJsonArray{id})) {
+            const auto state = preset["states"].toObject()[group.toString()].toString();
+            const auto permission = preset["diagnostics"].toObject()[group.toString()].toObject().value("state");
+            if (!QStringList{"Stopped","Halted"}.contains(state) || !permission.isDouble()
+                || (permission != QJsonValue(0) && permission != QJsonValue(3))) return false;
+        }
+    }
+    return true;
+}
+bool ControlSession::canAcknowledgeUnknown(const QString &id) const
+{
+    const auto op = m_records[id].toObject();
+    if (m_role != "control" || !m_journalHealthy || m_flow || busy() || !m_unknownQueries.contains(id)
+        || m_lastStatus <= m_unknownQueries.value(id) || op["state"] != QJsonValue("result_unknown")
+        || op["unknown_acknowledged"].toBool() || op["operation_id"].toString().isEmpty()) return false;
+    // Legacy records have no subset evidence: require all four groups stopped.
+    const auto presets = validPresets(op["presets"].toArray()) ? op["presets"].toArray()
+        : validPresets(op["params"].toObject()["presets"].toArray()) ? op["params"].toObject()["presets"].toArray()
+        : QJsonArray{"flippers","base","arm"};
+    return stoppedPresets(presets);
+}
+bool ControlSession::acknowledgeUnknown(const QString &id)
+{
+    if (!canAcknowledgeUnknown(id)) return false;
+    const auto old = m_records[id].toObject(); auto record = old;
+    record["unknown_acknowledged"] = true;
+    record["reconciliation"] = QJsonObject{{"confirmed_at",QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
+        {"epoch",m_epoch},{"presets",m_status["presets"]},{"runtime_fresh",true}};
+    m_records[id] = record;
+    if (!persist()) { m_records[id] = old; return false; }
+    // Historical outcome remains unknown. This never sends or replays an operation.
+    revoke("UNKNOWN_CONFIRMED"); m_nextFresh = m_nextStatus = 0;
+    emit event({{"type","control_operation"},{"operation",ControlProtocol::redact(record)}}); emit changed(); return true;
+}
+
 bool ControlSession::recoverRequest(const QString &id)
 {
     if (!ready() || !m_journalHealthy || m_pending.contains(id) || !m_records.contains(id)) return false;
@@ -476,7 +528,7 @@ void ControlSession::queryNextOperation()
     for (int i = 0; i < m_operationOrder.size(); ++i) {
         m_operationCursor %= m_operationOrder.size();
         const auto record = m_records[m_operationOrder[m_operationCursor++]].toObject();
-        if ((running(record) || record["state"] == QJsonValue("result_unknown")) && !record["operation_id"].toString().isEmpty()) {
+        if ((running(record) || (record["state"] == QJsonValue("result_unknown") && !record["unknown_acknowledged"].toBool())) && !record["operation_id"].toString().isEmpty()) {
             send("operation_query", {{"operation_id", record["operation_id"]}}); return;
         }
     }
@@ -487,9 +539,15 @@ bool ControlSession::acceptOperation(const QJsonObject &op, const QString &expec
     const auto old = m_records[expectedId].toObject();
     if (op["command"] != old["command"] || (!old["operation_id"].toString().isEmpty() && old["operation_id"] != op["operation_id"])) return false;
     auto record = op; record["params"] = old["params"]; record["request_type"] = old["request_type"];
+    const bool sameOutcome = op["state"] == old["state"] && op["result"] == old["result"]
+        && op["error"] == old["error"] && op["invalidated"] == old["invalidated"];
+    if (old["unknown_acknowledged"].toBool() && sameOutcome) {
+        record["unknown_acknowledged"] = true; record["reconciliation"] = old["reconciliation"];
+    }
+    if (!sameOutcome) m_unknownQueries.remove(expectedId);
     if (record != old) {
         saveRecord(expectedId, record);
-        if (!running(record)) { if (expectedId == m_flowRequest) m_flowStatusAfter = m_lastStatus; m_nextStatus = 0; emit stateRefreshRequested(); }
+        if (!running(record)) { if (expectedId == m_flowRequest || (m_flow && !m_flowStart)) m_flowStatusAfter = m_lastStatus; m_nextStatus = 0; emit stateRefreshRequested(); }
         if (op["invalidated"].toBool() || op["state"] == QJsonValue("result_unknown")) {
             revoke("OPERATION_RECONCILE"); m_nextStatus = 0;
         }
@@ -620,6 +678,10 @@ void ControlSession::receive(const QJsonObject &message)
         valid = acceptOperation(result, id);
     } else if (request.type == "operation_query") {
         valid = result["operation_id"] == QJsonValue(request.operationId) && acceptOperation(result, result["request_id"].toString());
+        const auto requestId = result["request_id"].toString();
+        if (valid && result["state"] == QJsonValue("result_unknown") && !m_unknownQueries.contains(requestId)) {
+            m_unknownQueries[requestId] = m_lastStatus; m_nextStatus = 0;
+        }
     }
     if (!valid) { fail(QStringLiteral("控制v2响应字段、身份或能力无效。"), false); return; }
     emit changed();
@@ -628,7 +690,7 @@ QJsonArray ControlSession::operations() const {
     QJsonArray result; for (const auto &id : m_operationOrder) result.append(ControlProtocol::redact(m_records[id])); return result;
 }
 QJsonObject ControlSession::diagnostics() const {
-    return {{"motion_presets_supported", m_presetAware}, {"pending_presets", m_desiredPresets}, {"selected_presets", m_selectedPresets}, {"selected_groups", m_selectedGroups}, {"preset_flow_active", m_flow}, {"preset_flow_phase", m_flowPhase}, {"role",m_role}, {"protocol_version", 2}, {"robot_id", m_robot}, {"build_version", m_build}, {"negotiated", negotiated()},
+    return {{"endpoint",m_endpoint}, {"connection_id",m_connectionId}, {"motion_presets_supported", m_presetAware}, {"pending_presets", m_desiredPresets}, {"selected_presets", m_selectedPresets}, {"selected_groups", m_selectedGroups}, {"preset_flow_active", m_flow}, {"preset_flow_phase", m_flowPhase}, {"role",m_role}, {"protocol_version", 2}, {"robot_id", m_robot}, {"build_version", m_build}, {"negotiated", negotiated()},
         {"ready", ready()}, {"epoch", m_epoch}, {"token_valid", tokenValid()}, {"motion_authorized", m_motionAuthorized},
         {"operations_authorized", m_operationsAuthorized}, {"journal_healthy", m_journalHealthy}, {"motion_permitted", ready() && m_permitted},
         {"emergency_active", m_emergency}, {"pending_requests", m_pending.size()}, {"last_rtt_ms", m_lastRtt},

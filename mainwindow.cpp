@@ -1,6 +1,7 @@
 #include "mainwindow.h"
 #include "./ui_mainwindow.h"
 #include "src/communication/HostProtocol.h"
+#include "src/communication/ControlProtocol.h"
 #include "src/communication/SharedStructs.h"
 #include "src/controller/MotorRuntimeCarouselWidget.h"
 #include <QtGlobal>
@@ -441,6 +442,12 @@ void MainWindow::setupBottomActionPanel()
     monitorLayout->addWidget(dangerButton, 0, 2);
     monitorLayout->addWidget(qrCodeButton, 1, 0);
     monitorLayout->addWidget(resetMonitorButton, 1, 1);
+    for (auto *button : {thermalButton,dynamicButton,dangerButton,qrCodeButton,resetMonitorButton}) {
+        button->setEnabled(false);
+        button->setToolTip(Communication::ControlProtocol::unsupportedCommandReason(QStringLiteral("thermal_monitor")));
+    }
+    auto *monitorNotice = new QLabel(QStringLiteral("当前控制协议未提供检测管理接口"), monitorGroup);
+    monitorNotice->setWordWrap(true); monitorLayout->addWidget(monitorNotice,2,0,1,3);
     monitorLayout->setColumnStretch(0, 1);
     monitorLayout->setColumnStretch(1, 1);
     monitorLayout->setColumnStretch(2, 1);
@@ -484,9 +491,12 @@ void MainWindow::setupBottomActionPanel()
 
 void MainWindow::handleMonitorCommand(const QString &label, const QString &command)
 {
-    addCommand(QString("[监测] 请求 %1").arg(label));
+    if (!Communication::ControlProtocol::supportsSystemCommand(command)) {
+        addError(QStringLiteral("[监测] %1：%2").arg(label,Communication::ControlProtocol::unsupportedCommandReason(command))); return;
+    }
     if (m_controller && m_controller->isTcpConnected()) {
-        m_controller->sendSystemCommand(command);
+        if (m_controller->sendSystemCommand(command)) addCommand(QStringLiteral("[监测] 已提交 %1，等待结果").arg(label));
+        else addError(QStringLiteral("[监测] %1 未提交，请检查会话与授权。").arg(label));
     } else {
         addError(QString("[监测] TCP未连接，未发送 %1").arg(label));
     }

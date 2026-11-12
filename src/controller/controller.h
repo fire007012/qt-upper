@@ -47,6 +47,8 @@ public:
     bool startPresets(const QJsonArray &ids);
     bool haltPresets(const QJsonArray &ids);
     bool selectPresets(const QJsonArray &ids);
+    bool canAcknowledgeUnknown(const QString &id) const;
+    bool acknowledgeUnknown(const QString &id);
     bool recoverControlRequest(const QString &id);
     QJsonObject controlDiagnostics() const;
     QJsonObject diagnostics() const;

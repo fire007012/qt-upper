@@ -8,6 +8,17 @@ QStringList ControlProtocol::capabilities()
 {
     return {"session_v2", "freshness_v2", "explicit_authorization", "bounded_operations", "isolated_output", "runtime_permission"};
 }
+bool ControlProtocol::supportsSystemCommand(const QString &command)
+{
+    return QStringList{"init","enable","disable","halt","resume","recover","shutdown","set_control_mode","request_arm_named_targets","move_arm_named_target"}.contains(command);
+}
+QString ControlProtocol::unsupportedCommandReason(const QString &command)
+{
+    if (supportsSystemCommand(command)) return {};
+    if (QStringList{"thermal_monitor","dynamic_monitor","danger_sign","qr_code_detect","reset_monitor"}.contains(command))
+        return QStringLiteral("当前控制 v2 协议未提供视觉检测管理接口，监测操作不可用；需下位机提供并协商对应接口。视频查看不受影响。");
+    return QStringLiteral("当前控制 v2 协议不支持此命令：%1").arg(command);
+}
 bool ControlProtocol::input(const OperatorInputState &state, QJsonObject *payload, bool *physicalNeutral)
 {
     auto legacy = HostProtocol::makeOperatorInput(state, 1);

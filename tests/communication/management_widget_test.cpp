@@ -15,6 +15,17 @@
 #include "RuntimeManagementWidget.h"
 #include "manager_stub.h"
 
+class V2ManagerStub : public ManagerStub {
+public:
+    void respond(QTcpSocket *peer, const QJsonObject &request) override {
+        if (request["method"] != QJsonValue("snapshot")) { ManagerStub::respond(peer,request); return; }
+        QJsonObject modules{{"core",QJsonObject{{"ok",true}}},{"bridge",QJsonObject{{"ok",true}}}};
+        QJsonObject snapshot{{"software_state",software},{"profile_id","mock"},{"config_revision","rev-A"},
+            {"operation_id",operationId.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(operationId)},
+            {"recovery_required",false},{"modules",modules},{"control_endpoint",QJsonObject{{"host","127.0.0.1"},{"port",9090},{"protocol_version",2}}}};
+        peer->write(QJsonDocument(QJsonObject{{"version",1},{"request_id",request["request_id"]},{"ok",true},{"result",snapshot}}).toJson(QJsonDocument::Compact)+'\n');
+    }
+};
 class ManagementWidgetTest : public QObject {
     Q_OBJECT
 private slots:
@@ -29,12 +40,45 @@ private slots:
         for(auto *check:widget.findChildren<QCheckBox *>()) if(check->objectName().startsWith("preset_")) check->setChecked(false);
         QVERIFY(widget.pendingPresets().isEmpty()); QVERIFY(!start->isEnabled());
         QSignalSpy requested(&widget,&RuntimeManagementWidget::startPresetsRequested); start->click(); QCOMPARE(requested.size(),0);
-        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true},{"selected_presets",QJsonArray{"base","arm"}}});
+        widget.setControlDiagnostics({{"ready",true},{"negotiated",true},{"motion_presets_supported",true},{"selected_presets",QJsonArray{"base","arm"}}});
         auto *stopAll=widget.findChild<QPushButton *>("presetHaltAll"); QVERIFY(stopAll->isEnabled());
         QSignalSpy stopped(&widget,&RuntimeManagementWidget::haltPresetsRequested); stopAll->click(); QCOMPARE(stopped.size(),1);
         QCOMPARE(stopped[0][0].value<QJsonArray>(),QJsonArray({"base","arm"}));
         base->setChecked(true); QSignalSpy recovered(&widget,&RuntimeManagementWidget::recoverPresetsRequested);
         widget.findChild<QPushButton *>("presetRecover")->click(); QCOMPARE(recovered.size(),1); QCOMPARE(recovered[0][0].value<QJsonArray>(),QJsonArray{"base"});
+    }
+    void capabilityStatusDistinguishesDisconnectedWaitingAndUnsupported() {
+        RuntimeManagementWidget widget; auto *label=widget.findChild<QLabel *>("presetState"); QVERIFY(label);
+        widget.setControlDiagnostics({}); QVERIFY(label->text().contains("未连接")); QVERIFY(!label->text().contains("升级"));
+        widget.setControlDiagnostics({{"transport_connected",true},{"capability_discovery","waiting"}});
+        QVERIFY(label->text().contains("等待能力声明")); QVERIFY(!label->text().contains("升级"));
+        widget.setControlDiagnostics({{"transport_connected",true},{"capability_discovery","declared"}});
+        QVERIFY(label->text().contains("正在协商"));
+        widget.setControlDiagnostics({{"negotiated",true},{"motion_presets_supported",false}});
+        QVERIFY(label->text().contains("服务端未声明")); QVERIFY(label->text().contains("升级"));
+        widget.setControlDiagnostics({{"capability_discovery","timeout"}}); QVERIFY(label->text().contains("超时"));
+        widget.setControlDiagnostics({{"capability_discovery","invalid"}}); QVERIFY(label->text().contains("声明无效"));
+    }
+    void automaticStartRequiresManagedEndpointAndNewConnection() {
+        QTemporaryDir directory; QVERIFY(directory.isValid()); QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,directory.path());
+        V2ManagerStub manager; QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *start=widget.findChild<QPushButton *>("managementStart"); QTRY_VERIFY(start->isEnabled());
+        QJsonObject ready{{"ready",true},{"motion_presets_supported",true},{"robot_id","robot24"},{"endpoint","127.0.0.1:9090"},{"connection_id","old-connection"}};
+        widget.setControlDiagnostics(ready);
+        QSignalSpy requested(&widget,&RuntimeManagementWidget::startPresetsRequested), endpoint(&widget,&RuntimeManagementWidget::controlEndpointReady);
+        start->click(); widget.setControlDiagnostics(ready); QCOMPARE(requested.size(),0);
+        QTRY_COMPARE(endpoint.size(),1);
+        widget.setControlDiagnostics(ready); QCOMPARE(requested.size(),0);
+        auto wrong=ready; wrong["connection_id"]="new-connection"; wrong["robot_id"]="other-robot";
+        widget.setControlDiagnostics(wrong); QCOMPARE(requested.size(),0);
+        wrong["robot_id"]="robot24"; wrong["endpoint"]="127.0.0.1:9999";
+        widget.setControlDiagnostics(wrong); QCOMPARE(requested.size(),0);
+        ready["connection_id"]="new-connection"; widget.setControlDiagnostics(ready); QCOMPARE(requested.size(),1);
+        widget.setControlDiagnostics(ready); QCOMPARE(requested.size(),1);
     }
     void configurationBlocksStartAndRefreshesProfile() {
         QTemporaryDir settingsDirectory; QVERIFY(settingsDirectory.isValid());

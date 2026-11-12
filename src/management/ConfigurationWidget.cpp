@@ -72,7 +72,7 @@ ConfigurationWidget::ConfigurationWidget(QWidget *parent) : QWidget(parent), m_s
             if (p["profile_id"] == QJsonValue(m_service.profileId())) m_profiles->setCurrentIndex(m_profiles->count()-1);
         }
     });
-    connect(m_profiles, &QComboBox::currentIndexChanged, this, [this] { m_service.selectProfile(m_profiles->currentData().toString()); });
+    connect(m_profiles, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this] { m_service.selectProfile(m_profiles->currentData().toString()); });
     connect(m_refresh, &QPushButton::clicked, &m_service, &ConfigurationService::refresh);
     connect(m_save, &QPushButton::clicked, this, [this] {
         QJsonArray patches;

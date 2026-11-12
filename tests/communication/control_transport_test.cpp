@@ -35,6 +35,22 @@ private slots:
         client.sendEmergencyStop("preset-global-emergency");
         QTRY_VERIFY(([&]{for(const auto &m:peer.messages) if(m["type"]==QJsonValue("emergency_stop")) return !m.contains("presets")&&!m.contains("groups"); return false;})());
     }
+    void delayedCapabilitiesStillNegotiateExactPresets() {
+        ControlPeer peer; peer.presetsEnabled=true; peer.capabilitiesDelayMs=450;
+        RobotTcpClient client; client.setPendingPresets({"base"}); start(peer,client);
+        QVERIFY(client.controlDiagnostics()["motion_presets_supported"].toBool()); QCOMPARE(peer.selectedPresets,QJsonArray{"base"});
+        int hellos=0; for (const auto &m:peer.messages) if(m["type"]==QJsonValue("control_hello")) {
+            ++hellos; QCOMPARE(m["presets"].toArray(),QJsonArray{"base"}); QVERIFY(m["capabilities"].toArray().contains("motion_presets_v1"));
+        }
+        QCOMPARE(hellos,1);
+    }
+    void missingCapabilitiesDoesNotObtainFullVehicleSession() {
+        ControlPeer peer; peer.advertiseCapabilities=false; QVERIFY(peer.server.listen(QHostAddress::LocalHost));
+        RobotTcpClient client; client.configureControlV2("robot24"); QSignalSpy errors(&client,&RobotTcpClient::connectionError);
+        QVERIFY(client.connectToROS("127.0.0.1",peer.server.serverPort())); QTRY_VERIFY_WITH_TIMEOUT(!errors.isEmpty(),3500);
+        QVERIFY(!client.controlDiagnostics()["negotiated"].toBool()); QCOMPARE(client.controlDiagnostics()["capability_discovery"].toString(),QString("timeout"));
+        for(const auto &m:peer.messages) QVERIFY(m["type"] != QJsonValue("control_hello"));
+    }
     void oldServerNeverStartsPresetFlow() {
         ControlPeer peer; RobotTcpClient client; start(peer,client);
         QVERIFY(!client.controlDiagnostics()["motion_presets_supported"].toBool()); QVERIFY(!client.startPresets({"base"}));

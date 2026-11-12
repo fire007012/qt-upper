@@ -48,8 +48,13 @@ public:
     bool selectPresets(const QJsonArray &ids) { return m_controlV2 && m_session.selectPresets(ids); }
     bool usesControlV2() const { return m_controlV2; }
     bool authorizeOperations() { return m_controlV2 && m_session.authorizeOperations(); }
+    bool canAcknowledgeUnknown(const QString &id) const { return m_controlV2 && m_session.canAcknowledgeUnknown(id); }
+    bool acknowledgeUnknown(const QString &id) { return m_controlV2 && m_session.acknowledgeUnknown(id); }
     bool recoverControlRequest(const QString &id) { return m_controlV2 && m_session.recoverRequest(id); }
-    QJsonObject controlDiagnostics() const { return m_controlV2 ? m_session.diagnostics() : QJsonObject{{"protocol_version", 1}}; }
+    QJsonObject controlDiagnostics() const {
+        auto value = m_controlV2 ? m_session.diagnostics() : QJsonObject{{"protocol_version", 1}};
+        value["transport_connected"] = isConnected(); value["capability_discovery"] = m_capabilityDiscovery; return value;
+    }
     ConnectionState connectionState() const { return m_connectionState; }
     bool setOperatorControlEnabled(bool enabled);
     bool isOperatorControlEnabled() const { return m_operatorControlEnabled; }
@@ -182,6 +187,7 @@ private:
     QElapsedTimer m_clock;
     ControlSession m_session;
     bool m_controlHelloStarted = false;
+    QString m_capabilityDiscovery = QStringLiteral("idle");
     EmergencyChannel m_emergencyChannel;
     bool m_controlV2 = false;
     QString m_expectedRobot;

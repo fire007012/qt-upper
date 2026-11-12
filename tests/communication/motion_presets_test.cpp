@@ -11,6 +11,8 @@ public:
     ControlSession client{nullptr,[this]{return time;}};
     QJsonArray selected{"flippers","base","arm"};
     QHash<QString,QString> states{{"flippers","Stopped"},{"base","Stopped"},{"arm","Stopped"},{"gripper","Stopped"}};
+    QHash<QString,int> permissionOverride;
+    bool omitDiagnostics = false;
     QList<QJsonObject> queue, wire, commands;
     QHash<QString,QJsonObject> ops;
     QString epoch = "e1", failure;
@@ -25,8 +27,9 @@ public:
             const auto id = v.toString(); QJsonObject actual, diagnostics; bool permitted = fresh;
             for (const auto &g : ControlSession::groupsFor(QJsonArray{v})) {
                 const auto state = states[g.toString()]; actual[g.toString()] = state; permitted &= state == "Running";
-                diagnostics[g.toString()] = QJsonObject{{"state",state == "Running" ? 2 : state == "Armed" ? 1 : state == "Fault" ? 3 : 0}, {"ready", state == "Running"}, {"blockers",QJsonArray{}}};
+                diagnostics[g.toString()] = QJsonObject{{"state",permissionOverride.contains(g.toString()) ? permissionOverride[g.toString()] : state == "Running" ? 2 : state == "Armed" ? 1 : state == "Fault" ? 3 : 0}, {"ready", state == "Running"}, {"blockers",QJsonArray{}}};
             }
+            if (omitDiagnostics) diagnostics = {};
             presets[id] = QJsonObject{{"label",id},{"groups",ControlSession::groupsFor(QJsonArray{v})},{"selected",selected.contains(v)},{"states",actual},{"diagnostics",diagnostics},{"motion_permitted",permitted}};
             if (selected.contains(v)) all &= permitted;
         }
@@ -42,6 +45,11 @@ public:
         int budget = 100;
         while (!queue.isEmpty() && --budget) {
             const auto m = queue.takeFirst(); const auto type = m["type"].toString();
+            if (type != "control_hello" && type != "control_status" && m["epoch"] != QJsonValue(epoch)) {
+                client.receive({{"type","control_result"},{"protocol_version",2},{"request_id",m["request_id"]},
+                    {"seq",m.contains("seq")?m["seq"]:QJsonValue(QJsonValue::Null)},{"ok",false},{"error",QJsonObject{{"code","EPOCH"}}}});
+                continue;
+            }
             if (type == "control_hello") {
                 auto r = token(); selected = m.contains("presets") ? m["presets"].toArray() : selected;
                 r["session_id"] = "session"; r["robot_id"] = "robot24"; r["role"] = m["role"]; r["authorized"] = false; r["build_version"] = "independent-preset-peer";
@@ -102,6 +110,28 @@ private slots:
         for(const auto &g : ControlSession::groupsFor(ids)) QCOMPARE(peer.states[g.toString()],QString("Running"));
         for(const auto &m : peer.commands) QCOMPARE(m["params"].toObject().size(),1);
     }
+    void manualHaltCancelsAutomaticStart() {
+        PresetPeer peer; peer.begin({"base"}); QVERIFY(peer.client.startPresets({"base"}));
+        for (int i=0;i<20 && !peer.client.operationsAuthorized();++i) peer.tick();
+        QVERIFY(peer.commands.isEmpty()); QVERIFY(peer.client.operationsAuthorized());
+        QVERIFY(peer.client.command("halt",{{"presets",QJsonArray{"base"}}})); peer.finish();
+        QVERIFY(!peer.client.motionAuthorized()); QVERIFY(!peer.client.diagnostics()["preset_flow_active"].toBool());
+        for (const auto &m : peer.commands) QCOMPARE(m["command"].toString(),QString("halt"));
+        QVERIFY(peer.states["base"] == "Stopped" || peer.states["base"] == "Halted");
+    }
+    void haltDuringAcceptedOperationWaitsThenStops() {
+        PresetPeer peer; peer.begin({"base"}); QVERIFY(peer.client.startPresets({"base"}));
+        for (int i=0;i<20 && peer.commands.isEmpty();++i) peer.tick();
+        QCOMPARE(peer.commands.size(),1); QCOMPARE(peer.commands[0]["command"].toString(),QString("init"));
+        QVERIFY(peer.client.haltPresets({"base"})); peer.finish();
+        QVERIFY2(peer.states["base"] == "Halted",qPrintable(QString::fromUtf8(QJsonDocument(peer.client.diagnostics()).toJson()))); QVERIFY(!peer.client.motionAuthorized());
+        for (const auto &m : peer.commands) QVERIFY(m["command"] != QJsonValue("enable") && m["command"] != QJsonValue("resume"));
+    }
+    void manualNonStopCannotCompeteWithAutomaticFlow() {
+        PresetPeer peer; peer.begin({"base"}); QVERIFY(peer.client.startPresets({"base"}));
+        QVERIFY(!peer.client.command("init",{})); QVERIFY(!peer.client.command("set_control_mode",{{"mode","vehicle"}}));
+        peer.finish(); QVERIFY(peer.client.motionAuthorized());
+    }
     void additionsOnlyStartNewPreset() {
         PresetPeer peer; peer.begin({"base"}); peer.states["base"]="Running"; peer.tick();
         QVERIFY(peer.client.startPresets({"base","arm"})); peer.finish(); QVERIFY(peer.client.motionAuthorized()); QCOMPARE(peer.selections,1);
@@ -121,6 +151,18 @@ private slots:
         QVERIFY(peer.client.haltPresets({"base"})); peer.finish(); QCOMPARE(peer.states["base"],QString("Halted"));
         QVERIFY(!peer.client.motionAuthorized()); QCOMPARE(peer.commands.size(),1); QCOMPARE(peer.commands[0]["command"].toString(),QString("halt"));
     }
+    void stopWaitsForEveryUnderlyingPermissionDiagnostic() {
+        PresetPeer peer; peer.begin({"arm"}); peer.states["arm"]="Halted"; peer.states["gripper"]="Halted";
+        peer.permissionOverride["gripper"]=2; for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(peer.client.haltPresets({"arm"})); for(int i=0;i<50;++i) peer.tick();
+        QVERIFY(peer.client.diagnostics()["preset_flow_active"].toBool()); QCOMPARE(peer.commands.size(),1);
+        QCOMPARE(peer.commands[0]["command"].toString(),QString("halt"));
+        peer.omitDiagnostics=true; for(int i=0;i<12;++i) peer.tick(); QVERIFY(peer.client.diagnostics()["preset_flow_active"].toBool());
+        peer.omitDiagnostics=false; peer.permissionOverride["gripper"]=0; peer.fresh=false;
+        for(int i=0;i<12;++i) peer.tick(); QVERIFY(peer.client.diagnostics()["preset_flow_active"].toBool());
+        peer.fresh=true; peer.finish(); QVERIFY(!peer.client.diagnostics()["preset_flow_active"].toBool());
+        QVERIFY(peer.client.diagnostics()["preset_flow_phase"].toString().contains("已停止")); QVERIFY(!peer.client.motionAuthorized());
+    }
     void partialFailurePreservesBothStatesAndNoRollback() {
         PresetPeer peer; peer.begin({"arm"}); peer.failure="gripper";
         QVERIFY(peer.client.startPresets({"arm"})); peer.finish(); QVERIFY(!peer.client.motionAuthorized());
@@ -136,6 +178,39 @@ private slots:
         QVERIFY(peer.client.startPresets({"base"})); peer.finish(); QVERIFY(!peer.client.motionAuthorized()); QCOMPARE(peer.commands.size(),1);
         QVERIFY(!peer.client.startPresets({"base"}));
         const auto op=peer.client.operations()[0].toObject(); QVERIFY(peer.client.recoverRequest(op["request_id"].toString())); peer.drain(); QCOMPARE(peer.commands.size(),1);
+    }
+    void unknownReconciliationRequiresFreshStopAndExplicitConfirmation() {
+        PresetPeer peer; peer.begin({"base"}); peer.unknown=true;
+        QVERIFY(peer.client.startPresets({"base"})); peer.finish();
+        const auto id=peer.client.operations()[0].toObject()["request_id"].toString();
+        QVERIFY(!peer.client.canAcknowledgeUnknown(id)); QVERIFY(!peer.client.acknowledgeUnknown(id));
+        peer.unknown=false; for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(peer.client.haltPresets({"base"})); peer.finish(); for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(peer.client.recoverRequest(id)); peer.drain(); for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(peer.client.canAcknowledgeUnknown(id));
+        peer.fresh=false; for(int i=0;i<12;++i) peer.tick(); QVERIFY(!peer.client.acknowledgeUnknown(id));
+        peer.fresh=true; for(int i=0;i<12;++i) peer.tick();
+        const auto count=peer.commands.size(); QVERIFY(peer.client.acknowledgeUnknown(id)); QCOMPARE(peer.commands.size(),count);
+        const auto record=peer.client.operations()[0].toObject(); QCOMPARE(record["state"].toString(),QString("result_unknown"));
+        QVERIFY(record["unknown_acknowledged"].toBool()); QVERIFY(record["reconciliation"].isObject());
+        QVERIFY(!peer.client.motionAuthorized()); for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(peer.client.recoverRequest(id)); peer.drain();
+        bool stillConfirmed=false; for(const auto &op:peer.client.operations()) if(op.toObject()["request_id"]==QJsonValue(id)) stillConfirmed=op.toObject()["unknown_acknowledged"].toBool();
+        QVERIFY(stillConfirmed);
+        auto changed=peer.ops[id]; changed["error"]="LATE_BACKEND_DETAIL"; peer.ops[id]=changed;
+        QVERIFY(peer.client.recoverRequest(id)); peer.drain(); for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(!peer.client.startPresets({"base"})); QVERIFY(peer.client.canAcknowledgeUnknown(id));
+        QVERIFY(peer.client.acknowledgeUnknown(id)); for(int i=0;i<12;++i) peer.tick();
+        QVERIFY(peer.client.startPresets({"base"})); peer.finish(); QVERIFY2(peer.client.motionAuthorized(),qPrintable(QString::fromUtf8(QJsonDocument(peer.client.diagnostics()).toJson())));
+        peer.client.reset(); PresetPeer restored; restored.begin({"base"});
+        bool preserved=false; for(const auto &op:restored.client.operations()) if(op.toObject()["request_id"]==QJsonValue(id)) preserved=op.toObject()["unknown_acknowledged"].toBool();
+        QVERIFY(preserved);
+        QVERIFY(restored.client.startPresets({"base"})); restored.finish(); QVERIFY(restored.client.motionAuthorized());
+    }
+    void missingAcceptanceCannotBeAcknowledgedWithoutQueryingOriginalIntent() {
+        PresetPeer peer; peer.begin({"base"}); peer.drop=true; QVERIFY(peer.client.startPresets({"base"})); peer.finish();
+        const auto id=peer.client.operations()[0].toObject()["request_id"].toString();
+        for(int i=0;i<12;++i) peer.tick(); QVERIFY(!peer.client.acknowledgeUnknown(id));
     }
     void staleFeedbackAndUnselectedFault() {
         PresetPeer peer; peer.begin({"base"}); peer.states["arm"]="Fault";
@@ -161,9 +236,24 @@ private slots:
         QVERIFY(!peer.wire.first().contains("presets")); QCOMPARE(peer.selected,QJsonArray({"flippers","base","arm"}));
         QVERIFY(!peer.client.authorizeMotion()); QVERIFY(!peer.client.authorizeOperations()); QVERIFY(!peer.client.selectPresets({"base"})); QVERIFY(!peer.client.startPresets({"base"})); QVERIFY(!peer.client.haltPresets({"base"}));
     }
+    void unsupportedMonitoringCommandsHaveReasonAndSendNothing() {
+        PresetPeer peer; peer.begin({"base"}); peer.tick(); QVERIFY(peer.client.authorizeOperations()); peer.drain();
+        const auto count=peer.wire.size(); QSignalSpy notices(&peer.client,&ControlSession::event);
+        for(const auto &command:QStringList{"thermal_monitor","dynamic_monitor","danger_sign","qr_code_detect","reset_monitor"}) {
+            QVERIFY(!ControlProtocol::supportsSystemCommand(command)); QVERIFY(ControlProtocol::unsupportedCommandReason(command).contains("未提供"));
+            QVERIFY(!peer.client.command(command,{}));
+        }
+        QCOMPARE(peer.wire.size(),count); QCOMPARE(notices.size(),5);
+    }
+    void gamepadReconnectRetainsExistingGrantAsRequested() {
+        PresetPeer peer; peer.begin({"base"}); QVERIFY(peer.client.startPresets({"base"})); peer.finish();
+        QVERIFY(peer.client.input({})); peer.drain(); for(int i=0;i<12;++i) peer.tick(); QVERIFY(peer.client.motionAuthorized());
+        OperatorInputState input; input.gamepad.connected=true; input.gamepad.axes.leftY=.8; QVERIFY(peer.client.input(input));
+        QCOMPARE(peer.wire.last()["gamepad"].toObject()["axes"].toObject()["left_y"].toDouble(),.8);
+    }
     void unselectedInputsAreFiltered() {
         PresetPeer peer; peer.begin({"base"}); QVERIFY(peer.client.startPresets({"base"})); peer.finish();
-        OperatorInputState input; input.keyboard.pressedKeys={"w","y","f"}; input.gamepad.connected=true; input.gamepad.axes.lt=1; input.gamepad.buttons.lb=true;
+        OperatorInputState input; input.keyboard.pressedKeys=QStringList{"w","y","f"}; input.gamepad.connected=true; input.gamepad.axes.lt=1; input.gamepad.buttons.lb=true;
         QVERIFY(peer.client.input(input)); auto m=peer.wire.last(); QCOMPARE(m["keyboard"].toObject()["pressed_keys"].toArray(),QJsonArray{"w"});
         QCOMPARE(m["gamepad"].toObject()["axes"].toObject()["lt"].toDouble(),0.0); QVERIFY(!m["gamepad"].toObject()["buttons"].toObject()["lb"].toBool());
         peer.drain(); input.mode="arm"; QVERIFY(peer.client.input(input)); m=peer.wire.last(); QVERIFY(m["keyboard"].toObject()["pressed_keys"].toArray().isEmpty());

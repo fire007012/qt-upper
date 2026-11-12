@@ -92,6 +92,8 @@ bool Controller::startPresets(const QJsonArray &ids) { return m_tcpClient && m_t
 bool Controller::haltPresets(const QJsonArray &ids) { return m_tcpClient && m_tcpClient->haltPresets(ids); }
 bool Controller::selectPresets(const QJsonArray &ids) { return m_tcpClient && m_tcpClient->selectPresets(ids); }
 bool Controller::authorizeOperations() { return m_tcpClient && m_tcpClient->authorizeOperations(); }
+bool Controller::canAcknowledgeUnknown(const QString &id) const { return m_tcpClient && m_tcpClient->canAcknowledgeUnknown(id); }
+bool Controller::acknowledgeUnknown(const QString &id) { return m_tcpClient && m_tcpClient->acknowledgeUnknown(id); }
 bool Controller::recoverControlRequest(const QString &id) { return m_tcpClient && m_tcpClient->recoverControlRequest(id); }
 QJsonObject Controller::controlDiagnostics() const { return m_tcpClient ? m_tcpClient->controlDiagnostics() : QJsonObject{}; }
 

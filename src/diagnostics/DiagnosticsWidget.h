@@ -17,5 +17,5 @@ private:
     QPlainTextEdit *m_details;
     QComboBox *m_requests;
     QLabel *m_status;
-    QPushButton *m_recover;
+    QPushButton *m_recover, *m_acknowledge;
 };

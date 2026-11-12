@@ -86,7 +86,7 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     recoveryButtons->addWidget(m_presetRecover); recoveryButtons->addWidget(m_presetHaltAll); layout->addLayout(recoveryButtons);
     connect(m_presetRecover, &QPushButton::clicked, this, [this] { emit recoverPresetsRequested(pendingPresets()); });
     connect(m_presetHaltAll, &QPushButton::clicked, this, [this] { emit haltPresetsRequested(m_controlDiagnostics["selected_presets"].toArray()); });
-    m_presetState = new QLabel(QStringLiteral("等待能力协商；旧服务端不支持分组启动"), this); m_presetState->setWordWrap(true); layout->addWidget(m_presetState);
+    m_presetState = new QLabel(QStringLiteral("等待能力协商；旧服务端不支持分组启动"), this); m_presetState->setWordWrap(true); m_presetState->setObjectName("presetState"); layout->addWidget(m_presetState);
     m_presetDetails = new QPlainTextEdit(this); m_presetDetails->setReadOnly(true); m_presetDetails->setMaximumHeight(170); layout->addWidget(m_presetDetails);
     connect(m_presetStart, &QPushButton::clicked, this, [this] { emit startPresetsRequested(pendingPresets()); });
     connect(m_presetHalt, &QPushButton::clicked, this, [this] { emit haltPresetsRequested(pendingPresets()); });
@@ -127,9 +127,11 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     connect(m_start, &QPushButton::clicked, this, [this] {
         if (pendingPresets().isEmpty()) return;
         m_startTarget = pendingPresets(); m_startWhenReady = true;
+        m_expectedStartRobot.clear(); m_expectedStartEndpoint.clear();
         emit pendingPresetsChanged(m_startTarget);
         const auto p = selectedProfile();
-        m_service.start(p["profile_id"].toString(), p["config_revision"].toString());
+        m_startProfile = p["profile_id"].toString(); m_startRevision = p["config_revision"].toString();
+        if (!m_service.start(m_startProfile, m_startRevision)) m_startWhenReady = false;
     });
     connect(m_stop, &QPushButton::clicked, this, [this] { m_startWhenReady = false; m_service.stop(); });
     connect(m_preflight, &QPushButton::clicked, this, [this] {
@@ -139,7 +141,22 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     connect(&m_service, &RuntimeService::availabilityChanged, this, &RuntimeManagementWidget::updateActions);
     connect(&m_service, &RuntimeService::statusChanged, m_connection, &QLabel::setText);
     connect(&m_service, &RuntimeService::errorOccurred, this, [this](const QString &text) { m_startWhenReady = false; append(text); });
-    connect(&m_service, &RuntimeService::controlEndpointReady, this, &RuntimeManagementWidget::controlEndpointReady);
+    connect(&m_service, &RuntimeService::controlEndpointReady, this,
+            [this](const QString &host, quint16 port, int protocol, const QString &robotId) {
+        if (m_startWhenReady) {
+            const auto snapshot = m_service.snapshot();
+            if (protocol != 2 || snapshot["profile_id"] != QJsonValue(m_startProfile)
+                || snapshot["config_revision"] != QJsonValue(m_startRevision)) {
+                m_startWhenReady = false;
+                append(QStringLiteral("启动档案或控制端点与本次请求不一致，运动预设未执行。"));
+            } else {
+                m_expectedStartRobot = robotId;
+                m_expectedStartEndpoint = host + ':' + QString::number(port);
+                m_previousConnectionId = m_controlDiagnostics["connection_id"].toString();
+            }
+        }
+        emit controlEndpointReady(host, port, protocol, robotId);
+    });
     connect(&m_service, &RuntimeService::controlUnavailable, this, &RuntimeManagementWidget::controlUnavailable);
     connect(&m_service, &RuntimeService::stateInvalidated, this, [this] {
         m_state->setText(QStringLiteral("软件状态：未知/同步中"));
@@ -158,7 +175,7 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
         }
         updateActions();
     });
-    connect(m_profiles, &QComboBox::currentIndexChanged, this, [this] {
+    connect(m_profiles, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this] {
         QSettings s("HostComputer", "Management"); s.setValue("profile_id", selectedProfile()["profile_id"].toString());
         updateActions();
     });
@@ -218,13 +235,14 @@ void RuntimeManagementWidget::updateActions()
         && m_service.snapshot()["software_state"] == QJsonValue("stopped")
         && m_service.snapshot()["recovery_required"] == QJsonValue(false));
     m_start->setEnabled(m_service.canStart() && !selectedProfile().isEmpty() && !pendingPresets().isEmpty());
+    const bool connected = m_controlDiagnostics["negotiated"].toBool() && m_controlDiagnostics["motion_presets_supported"].toBool();
     const bool ready = m_controlDiagnostics["ready"].toBool() && m_controlDiagnostics["motion_presets_supported"].toBool()
         && !m_controlDiagnostics["preset_flow_active"].toBool();
     m_presetStart->setEnabled(ready && !pendingPresets().isEmpty());
-    m_presetHalt->setEnabled(ready && !pendingPresets().isEmpty());
+    m_presetHalt->setEnabled(connected && !pendingPresets().isEmpty());
     m_presetSelect->setEnabled(ready && !pendingPresets().isEmpty());
     m_presetRecover->setEnabled(ready && !pendingPresets().isEmpty());
-    m_presetHaltAll->setEnabled(ready && !m_controlDiagnostics["selected_presets"].toArray().isEmpty());
+    m_presetHaltAll->setEnabled(connected && !m_controlDiagnostics["selected_presets"].toArray().isEmpty());
     m_preflight->setEnabled(m_service.canStart() && !selectedProfile().isEmpty());
     m_stop->setEnabled(m_service.canStop());
 }
@@ -245,12 +263,18 @@ void RuntimeManagementWidget::setControlDiagnostics(const QJsonObject &diagnosti
     const bool supported = diagnostics["motion_presets_supported"].toBool();
     const auto status = diagnostics["server"].toObject();
     const bool fresh = diagnostics["ready"].toBool() && status["runtime_fresh"].toBool();
-    m_presetState->setText(supported
-        ? QStringLiteral("机器人确认：%1；反馈：%2；遥控：%3\n%4")
+    const bool negotiated = diagnostics["negotiated"].toBool();
+    const auto discovery = diagnostics["capability_discovery"].toString();
+    if (discovery == "timeout") m_presetState->setText(QStringLiteral("能力发现超时，未取得控制会话；请检查网络、桥接状态和部署日志。"));
+    else if (discovery == "invalid") m_presetState->setText(QStringLiteral("控制能力声明无效或版本不兼容；未取得控制会话。"));
+    else if (!negotiated && !diagnostics["transport_connected"].toBool()) m_presetState->setText(QStringLiteral("控制桥未连接；请先连接管理服务并启动软件，或连接控制桥。"));
+    else if (!negotiated) m_presetState->setText(discovery == "declared"
+        ? QStringLiteral("能力声明已收到，正在协商控制会话并同步状态…") : QStringLiteral("控制桥已连接，等待能力声明…"));
+    else if (!supported) m_presetState->setText(QStringLiteral("服务端未声明 motion_presets_v1；分组操作不可用，请升级桥接后重新连接。"));
+    else m_presetState->setText(QStringLiteral("机器人确认：%1；反馈：%2；遥控：%3\n%4")
             .arg(QString::fromUtf8(QJsonDocument(diagnostics["selected_presets"].toArray()).toJson(QJsonDocument::Compact)),
                  fresh ? QStringLiteral("新鲜") : QStringLiteral("过期/未知，禁止运动"),
-                 diagnostics["motion_authorized"].toBool() ? QStringLiteral("已授权") : QStringLiteral("暂停"), diagnostics["preset_flow_phase"].toString())
-        : QStringLiteral("未协商 motion_presets_v1，分组操作不可用；请部署匹配桥接，无整车自动回退。"));
+                 diagnostics["motion_authorized"].toBool() ? QStringLiteral("已授权") : QStringLiteral("暂停"), diagnostics["preset_flow_phase"].toString()));
     QJsonArray operations = diagnostics["operations"].toArray();
     for (int i = 0; i < operations.size(); ++i) {
         auto op = operations[i].toObject(); auto results = op["result"].toArray();
@@ -261,7 +285,7 @@ void RuntimeManagementWidget::setControlDiagnostics(const QJsonObject &diagnosti
         }
         op["result"] = results; operations[i] = op;
     }
-    if (supported) {
+    if (supported && negotiated) {
         QStringList lines;
         const auto presets = status["presets"].toObject();
         for (const auto &id : QStringList{"flippers","base","arm"}) {
@@ -278,7 +302,11 @@ void RuntimeManagementWidget::setControlDiagnostics(const QJsonObject &diagnosti
     }
     m_presetDetails->setPlainText(QString::fromUtf8(QJsonDocument(QJsonObject{{"presets", status["presets"]}, {"operations", operations}}).toJson(QJsonDocument::Indented)));
     updateActions();
-    if (m_startWhenReady && diagnostics["ready"].toBool()) {
+    if (m_startWhenReady && !m_expectedStartRobot.isEmpty() && diagnostics["ready"].toBool()
+        && diagnostics["robot_id"] == QJsonValue(m_expectedStartRobot)
+        && diagnostics["endpoint"] == QJsonValue(m_expectedStartEndpoint)
+        && !diagnostics["connection_id"].toString().isEmpty()
+        && diagnostics["connection_id"].toString() != m_previousConnectionId) {
         m_startWhenReady = false;
         if (supported) emit startPresetsRequested(m_startTarget);
         else append(QStringLiteral("软件已启动，但服务端缺少运动预设能力；分组启动未执行。"));

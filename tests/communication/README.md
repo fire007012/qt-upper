@@ -114,3 +114,17 @@ Linux实际ROS2 DDS mock、仅接口类型的临时覆盖层、真实H264/RTSP�
 ## 三组运动预设（文档51）
 
 `motion_presets_protocol` 直接编译生产会话层，以独立 JSON peer 覆盖七种组合、增删预设、部分失败、过期、选择代际隔离和未知结果恢复，不需要 ROS 或本机端口。`control_v2_transport` 另验证连接能力发现及全局急停；`management_widget_flow` 另验证预设多选、空选择与能力门槛。使用及边界见 [Qt三组运动预设使用与验收](../../docs/Qt三组运动预设使用与验收.md)。
+
+
+文档51复核修复已增加：启动期间普通停止取消后续步骤、在途操作终态后的状态屏障、管理启动的目标/端点/新连接绑定、延迟和缺失能力声明、未知结果的显式停止对账和持久确认、停止诊断缺失/不一致/过期、界面连接阶段提示及不支持的检测命令原因。按用户要求保留手柄热插拔授权行为，并用独立输入回归固定该行为。
+
+验证 Qt5 独立回归（包括可选 Widgets）可显式选择系统 Qt5：
+
+```sh
+cmake -S tests/communication -B /tmp/hostcomputer-communication-qt5-fixes \
+  -DQT_DIR=/usr/lib/x86_64-linux-gnu/cmake/Qt5 -DHOST_BUILD_WIDGET_TESTS=ON
+cmake --build /tmp/hostcomputer-communication-qt5-fixes -j3
+QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/hostcomputer-communication-qt5-fixes --output-on-failure -j4
+```
+
+该命令不构建 Qt5 完整应用，不启动 ROS 或硬件。实际 Qt5 安装路径按平台调整。

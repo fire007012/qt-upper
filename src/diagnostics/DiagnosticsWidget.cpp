@@ -21,6 +21,19 @@ DiagnosticsWidget::DiagnosticsWidget(Controller *controller, QWidget *parent) : 
     auto *row = new QHBoxLayout; m_requests = new QComboBox(this);
     m_recover = new QPushButton(QStringLiteral("查询/恢复所选请求"), this);
     row->addWidget(m_requests, 1); row->addWidget(m_recover); layout->addLayout(row);
+    m_acknowledge = new QPushButton(QStringLiteral("确认停止状态并解除未知阻断"), this); layout->addWidget(m_acknowledge);
+    auto updateAcknowledgement = [this] { m_acknowledge->setEnabled(m_controller->canAcknowledgeUnknown(m_requests->currentData().toString())); };
+    connect(m_requests, QOverload<int>::of(&QComboBox::currentIndexChanged), this, updateAcknowledgement);
+    connect(m_acknowledge, &QPushButton::clicked, this, [this] {
+        const auto id = m_requests->currentData().toString();
+        if (QMessageBox::question(this, QStringLiteral("确认未知操作已对账"),
+            QStringLiteral("请确认已查询原任务，全部相关组已有新鲜停止状态及停止许可诊断。此操作仅解除本地阻断，原结果仍标记未知，不重发操作、不恢复运动。是否确认？"),
+            QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes) {
+            m_status->setText(m_controller->acknowledgeUnknown(id) ? QStringLiteral("已记录操作员确认；后续操作仍需新授权。")
+                : QStringLiteral("不能解除：请先停止全部相关组、查询原任务并等待新鲜停止反馈；在途操作或反馈变化时需重新核对。"));
+            refresh();
+        }
+    });
     m_details = new QPlainTextEdit(this); m_details->setReadOnly(true); layout->addWidget(m_details, 1);
     auto *exportButton = new QPushButton(QStringLiteral("导出诊断 JSON"), this); layout->addWidget(exportButton);
     connect(m_recover, &QPushButton::clicked, this, [this] {
@@ -48,4 +61,5 @@ void DiagnosticsWidget::refresh()
         if (id == previous) m_requests->setCurrentIndex(m_requests->count()-1);
     }
     m_recover->setEnabled(m_controller->controlDiagnostics()["ready"].toBool() && m_requests->count());
+    m_acknowledge->setEnabled(m_controller->canAcknowledgeUnknown(m_requests->currentData().toString()));
 }

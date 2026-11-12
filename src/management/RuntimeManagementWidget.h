@@ -35,6 +35,7 @@ private:
     QPlainTextEdit *m_presetDetails;
     bool m_startWhenReady = false;
     QJsonArray m_startTarget;
+    QString m_startProfile, m_startRevision, m_expectedStartRobot, m_expectedStartEndpoint, m_previousConnectionId;
     QJsonObject m_controlDiagnostics;
     ConfigurationWidget *m_configuration;
     QString m_settingsScope;
