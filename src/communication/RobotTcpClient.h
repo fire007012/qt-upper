@@ -42,6 +42,10 @@ public:
     bool isConnected() const;
     void setRequiredCapabilities(const QStringList &capabilities) { m_requiredCapabilities = capabilities; }
     void configureControlV2(const QString &robotId);
+    bool setPendingPresets(const QJsonArray &ids) { return m_session.setPendingPresets(ids); }
+    bool startPresets(const QJsonArray &ids) { return m_controlV2 && m_session.startPresets(ids); }
+    bool haltPresets(const QJsonArray &ids) { return m_controlV2 && m_session.haltPresets(ids); }
+    bool selectPresets(const QJsonArray &ids) { return m_controlV2 && m_session.selectPresets(ids); }
     bool usesControlV2() const { return m_controlV2; }
     bool authorizeOperations() { return m_controlV2 && m_session.authorizeOperations(); }
     bool recoverControlRequest(const QString &id) { return m_controlV2 && m_session.recoverRequest(id); }
@@ -177,6 +181,7 @@ private:
     QTimer *m_connectTimer;
     QElapsedTimer m_clock;
     ControlSession m_session;
+    bool m_controlHelloStarted = false;
     EmergencyChannel m_emergencyChannel;
     bool m_controlV2 = false;
     QString m_expectedRobot;

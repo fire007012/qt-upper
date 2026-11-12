@@ -1,5 +1,5 @@
 {
-  "host_build_version": "host-ros2-v2-config-2",
+  "host_build_version": "host-ros2-v2-presets-1",
   "management_protocol_version": 1,
   "control_protocol_version": 2,
   "control_capabilities": [
@@ -14,7 +14,8 @@
   "reference_documents": [
     39,
     40,
-    41
+    41,
+    51
   ],
   "tested_host_platform": "Ubuntu 22.04.5 x86_64 Qt6.12",
   "release_target": "Linux x86_64",
@@ -28,5 +29,13 @@
     "h264_rtsp_loopback"
   ],
   "windows_validated": false,
-  "physical_acceptance": false
+  "physical_acceptance": false,
+  "optional_control_capabilities": [
+    "motion_presets_v1"
+  ],
+  "motion_presets_acceptance": {
+    "independent_protocol_mock": true,
+    "qt_robot_integration": false,
+    "physical_acceptance": false
+  }
 }

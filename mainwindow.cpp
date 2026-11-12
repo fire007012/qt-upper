@@ -175,6 +175,38 @@ MainWindow::MainWindow(QWidget *parent)
         addCommand(QStringLiteral("[管理] 软件可服务，正在同步控制桥；遥控保持暂停"));
     });
 
+    m_controller->setPendingPresets(runtimeWidget->pendingPresets());
+    connect(runtimeWidget, &RuntimeManagementWidget::pendingPresetsChanged, m_controller, &Controller::setPendingPresets);
+    connect(runtimeWidget, &RuntimeManagementWidget::startPresetsRequested, this, [this](const QJsonArray &ids) {
+        if (!m_controller->startPresets(ids)) addError(QStringLiteral("[预设] 启动未提交：需预设能力、新鲜状态、无未决任务且急停已解除。"));
+    });
+    connect(runtimeWidget, &RuntimeManagementWidget::haltPresetsRequested, this, [this](const QJsonArray &ids) {
+        if (!m_controller->haltPresets(ids)) addError(QStringLiteral("[预设] 停止未提交，请检查已确认选择和未决任务。"));
+    });
+    connect(runtimeWidget, &RuntimeManagementWidget::selectPresetsRequested, this, [this](const QJsonArray &ids) {
+        if (!m_controller->selectPresets(ids)) addError(QStringLiteral("[预设] 选择未提交：请归中；取消组须先停止并取得新鲜诊断。"));
+    });
+    connect(runtimeWidget, &RuntimeManagementWidget::recoverPresetsRequested, this, [this](const QJsonArray &ids) {
+        if (!m_controller->sendSystemCommand(QStringLiteral("recover"), {{"presets",ids}}))
+            addError(QStringLiteral("[预设] 恢复未提交：请先归中并允许操作；只可恢复已确认选择的非空子集。"));
+    });
+    auto *presetTimer = new QTimer(runtimeWidget);
+    presetTimer->setInterval(100);
+    connect(presetTimer, &QTimer::timeout, runtimeWidget, [this, runtimeWidget] {
+        const auto diagnostics = m_controller->controlDiagnostics();
+        runtimeWidget->setControlDiagnostics(diagnostics);
+        const bool anyDraft = !runtimeWidget->pendingPresets().isEmpty();
+        if (m_operatorControlButton) m_operatorControlButton->setEnabled(anyDraft || m_operatorControlEnabled);
+        if (m_operationsControlButton) m_operationsControlButton->setEnabled(anyDraft || m_operationsAuthorized);
+        if (diagnostics["motion_presets_supported"].toBool()) {
+            const bool arm = diagnostics["selected_presets"].toArray().contains("arm");
+            ui->btn_mode_arm->setEnabled(arm);
+            if (m_refreshArmActionButton) m_refreshArmActionButton->setEnabled(arm);
+            if (m_executeArmActionButton && !arm) m_executeArmActionButton->setEnabled(false);
+        }
+    });
+    presetTimer->start();
+
     // 初始化UI状态
     updateConnectionDisplay();
     updateHeartbeatDisplay();
@@ -293,7 +325,8 @@ void MainWindow::setupDisplayLayout()
 
     connectLifecycleButton(ui->btn_lifecycle_init, QStringLiteral("init"));
     connectLifecycleButton(ui->btn_lifecycle_enable, QStringLiteral("enable"));
-    connectLifecycleButton(ui->btn_lifecycle_disable, QStringLiteral("disable"));
+    ui->btn_lifecycle_disable->setText(QStringLiteral("停止"));
+    connectLifecycleButton(ui->btn_lifecycle_disable, QStringLiteral("halt"));
     connectLifecycleButton(ui->btn_lifecycle_halt, QStringLiteral("halt"));
     connectLifecycleButton(ui->btn_lifecycle_resume, QStringLiteral("resume"));
     connectLifecycleButton(ui->btn_lifecycle_recover, QStringLiteral("recover"));

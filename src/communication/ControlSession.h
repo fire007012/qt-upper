@@ -12,8 +12,14 @@ class ControlSession : public QObject {
     Q_OBJECT
 public:
     explicit ControlSession(QObject *parent = nullptr, std::function<qint64()> clock = {});
-    void begin(const QString &robotId, const QString &endpoint);
+    void begin(const QString &robotId, const QString &endpoint, bool motionPresets = false, const QString &role = QStringLiteral("control"));
     void reset();
+    bool setPendingPresets(const QJsonArray &presets);
+    bool startPresets(const QJsonArray &presets);
+    bool selectPresets(const QJsonArray &presets);
+    bool haltPresets(const QJsonArray &presets);
+    static bool validPresets(const QJsonArray &presets);
+    static QJsonArray groupsFor(const QJsonArray &presets);
     void receive(const QJsonObject &message);
     void poll();
     bool input(const OperatorInputState &state);
@@ -22,7 +28,7 @@ public:
     bool clearEmergency();
     void emergencyIntent();
     void pause();
-    bool command(const QString &command, const QJsonObject &params);
+    bool command(const QString &command, QJsonObject params);
     bool recoverRequest(const QString &requestId);
     bool ready() const;
     bool motionAuthorized() const { return m_motionAuthorized; }
@@ -50,6 +56,10 @@ private:
         qint64 sentAt = 0, deadline = 0;
         bool physicalNeutral = false;
     };
+    void advancePresets();
+    void stopPresetFlow(const QString &reason);
+    bool busy() const;
+    bool acceptSelection(const QJsonObject &result);
     qint64 now() const;
     bool tokenValid() const;
     bool neutralReady() const;
@@ -68,9 +78,15 @@ private:
     void saveRecord(const QString &id, const QJsonObject &record);
     void queryNextOperation();
     void notify(const QString &code, const QString &message = {});
+    bool m_presetAware = false, m_flow = false, m_flowStart = false;
+    QJsonArray m_desiredPresets{QStringLiteral("flippers"), QStringLiteral("base"), QStringLiteral("arm")};
+    QJsonArray m_selectedPresets, m_selectedGroups, m_flowTarget;
+    QString m_flowRequest, m_flowPhase;
+    qint64 m_flowDeadline = 0, m_flowStatusAfter = -1;
     QElapsedTimer m_clock;
     std::function<qint64()> m_now;
     QTimer m_timer;
+    QString m_role = QStringLiteral("control");
     QString m_robot, m_scope, m_session, m_epoch, m_token, m_build;
     quint64 m_sequence = 0;
     quint64 m_authorizationGeneration = 0;

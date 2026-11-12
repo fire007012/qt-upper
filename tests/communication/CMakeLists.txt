@@ -135,3 +135,10 @@ add_executable(control_reference_probe
     ${HOST_ROOT}/src/utils/ErrorHandler.cpp)
 target_include_directories(control_reference_probe PRIVATE ${HOST_ROOT}/src/communication ${HOST_ROOT}/src/utils)
 target_link_libraries(control_reference_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)
+
+add_executable(motion_presets_test motion_presets_test.cpp ${HOST_CONTROL_SOURCES}
+    ${HOST_ROOT}/src/communication/HostProtocol.cpp)
+target_include_directories(motion_presets_test PRIVATE ${HOST_ROOT}/src/communication)
+target_link_libraries(motion_presets_test PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)
+add_test(NAME motion_presets_protocol COMMAND motion_presets_test)
+set_tests_properties(motion_presets_protocol PROPERTIES TIMEOUT 30)

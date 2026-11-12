@@ -87,6 +87,10 @@ bool Controller::setOperatorControlEnabled(bool enabled)
     return m_tcpClient && m_tcpClient->setOperatorControlEnabled(enabled);
 }
 
+bool Controller::setPendingPresets(const QJsonArray &ids) { return m_tcpClient && m_tcpClient->setPendingPresets(ids); }
+bool Controller::startPresets(const QJsonArray &ids) { return m_tcpClient && m_tcpClient->startPresets(ids); }
+bool Controller::haltPresets(const QJsonArray &ids) { return m_tcpClient && m_tcpClient->haltPresets(ids); }
+bool Controller::selectPresets(const QJsonArray &ids) { return m_tcpClient && m_tcpClient->selectPresets(ids); }
 bool Controller::authorizeOperations() { return m_tcpClient && m_tcpClient->authorizeOperations(); }
 bool Controller::recoverControlRequest(const QString &id) { return m_tcpClient && m_tcpClient->recoverControlRequest(id); }
 QJsonObject Controller::controlDiagnostics() const { return m_tcpClient ? m_tcpClient->controlDiagnostics() : QJsonObject{}; }

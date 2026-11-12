@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <memory>
 #include "ControlProtocol.h"
+#include "ControlSession.h"
 
 // Independent socket peer. It neither imports nor emulates hardware/ROS.
 class ControlPeer : public QObject {
@@ -12,7 +13,8 @@ public:
     QList<QTcpSocket *> peers;
     quint64 acceptedConnections = 0, motionSamples = 0;
     QList<QJsonObject> messages;
-    bool freshness = true, status = true;
+    bool freshness = true, status = true, presetsEnabled = false;
+    QJsonArray selectedPresets{"base"};
     QString identity = "robot24";
     ~ControlPeer() override {
         server.close();
@@ -33,6 +35,7 @@ public:
                         messages.append(message); if(messages.size()>256)messages.removeFirst(); handle(socket,message);
                     }
                 });
+                if (presetsEnabled) send(socket,{{"type","capabilities"},{"control_protocol_version",2},{"control_capabilities",QJsonArray{"motion_presets_v1"}}});
                 send(socket,{{"type","hello"},{"protocol_version",1},{"robot_id",identity}});
             }
         });
@@ -49,9 +52,18 @@ public:
         else if(type=="sync_request") send(socket,{{"type","system_snapshot"},{"seq",m["seq"]},{"emergency",QJsonObject{{"active",false}}}});
         else if(type=="control_hello") {
             auto hello=token(); hello["session_id"]="peer-session";hello["robot_id"]=identity;hello["role"]="control";
-            hello["capabilities"]=QJsonArray::fromStringList(Communication::ControlProtocol::capabilities());hello["authorized"]=false;hello["build_version"]="independent-peer";reply(socket,m,hello);
+            hello["capabilities"]=QJsonArray::fromStringList(Communication::ControlProtocol::capabilities());hello["authorized"]=false;hello["build_version"]="independent-peer";
+            if(presetsEnabled) {
+                selectedPresets=m["presets"].toArray(); auto caps=hello["capabilities"].toArray(); caps.append("motion_presets_v1"); hello["capabilities"]=caps;
+                hello["selected_presets"]=selectedPresets; hello["selected_groups"]=Communication::ControlSession::groupsFor(selectedPresets);
+            }
+            reply(socket,m,hello);
         } else if(type=="freshness_request"&&freshness) reply(socket,m,token());
-        else if(type=="control_status"&&status) reply(socket,m,{{"epoch","epoch-A"},{"authorized",true},{"motion_permitted",true},{"emergency_active",false},{"counts",QJsonObject{}},{"queue_depth",0}});
+        else if(type=="control_status"&&status) {
+            QJsonObject r{{"epoch","epoch-A"},{"authorized",true},{"motion_permitted",true},{"emergency_active",false},{"counts",QJsonObject{}},{"queue_depth",0}};
+            if(presetsEnabled) { r["selected_presets"]=selectedPresets; r["selected_groups"]=Communication::ControlSession::groupsFor(selectedPresets); r["presets"]=QJsonObject{}; r["runtime_fresh"]=true; r["operations_authorized"]=false; }
+            reply(socket,m,r);
+        }
         else if(type=="operator_input") {
             if (!m["keyboard"].toObject()["pressed_keys"].toArray().isEmpty()) ++motionSamples;
             reply(socket,m,{{"input_status","neutral"}});

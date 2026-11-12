@@ -18,6 +18,24 @@
 class ManagementWidgetTest : public QObject {
     Q_OBJECT
 private slots:
+    void presetDraftAndCapabilityGate() {
+        RuntimeManagementWidget widget;
+        QSignalSpy changed(&widget,&RuntimeManagementWidget::pendingPresetsChanged);
+        auto *base=widget.findChild<QCheckBox *>("preset_base"); QVERIFY(base);
+        base->setChecked(false); QCOMPARE(changed.size(),1); QCOMPARE(widget.pendingPresets(),QJsonArray({"flippers","arm"}));
+        auto *start=widget.findChild<QPushButton *>("presetStart"); QVERIFY(!start->isEnabled());
+        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",false}}); QVERIFY(!start->isEnabled());
+        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true}}); QVERIFY(start->isEnabled());
+        for(auto *check:widget.findChildren<QCheckBox *>()) if(check->objectName().startsWith("preset_")) check->setChecked(false);
+        QVERIFY(widget.pendingPresets().isEmpty()); QVERIFY(!start->isEnabled());
+        QSignalSpy requested(&widget,&RuntimeManagementWidget::startPresetsRequested); start->click(); QCOMPARE(requested.size(),0);
+        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true},{"selected_presets",QJsonArray{"base","arm"}}});
+        auto *stopAll=widget.findChild<QPushButton *>("presetHaltAll"); QVERIFY(stopAll->isEnabled());
+        QSignalSpy stopped(&widget,&RuntimeManagementWidget::haltPresetsRequested); stopAll->click(); QCOMPARE(stopped.size(),1);
+        QCOMPARE(stopped[0][0].value<QJsonArray>(),QJsonArray({"base","arm"}));
+        base->setChecked(true); QSignalSpy recovered(&widget,&RuntimeManagementWidget::recoverPresetsRequested);
+        widget.findChild<QPushButton *>("presetRecover")->click(); QCOMPARE(recovered.size(),1); QCOMPARE(recovered[0][0].value<QJsonArray>(),QJsonArray{"base"});
+    }
     void configurationBlocksStartAndRefreshesProfile() {
         QTemporaryDir settingsDirectory; QVERIFY(settingsDirectory.isValid());
         QSettings::setDefaultFormat(QSettings::IniFormat);

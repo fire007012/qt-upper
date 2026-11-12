@@ -110,3 +110,7 @@ python3 -B tests/communication/control_reference_integration.py \
 Linux实际ROS2 DDS mock、仅接口类型的临时覆盖层、真实H264/RTSP解码、Wayland渲染读回及管理20轮契约的命令也见该说明。ROS2测试需显式给定参考路径，不属于默认无ROS通信构建。Windows现为后续可选项，不阻塞Linux验证。
 
 授权单测补充事件循环延迟时新令牌不能掩盖过期间隔、许可失效再恢复不能复活在途授权，以及诊断导出拒绝符号链接目标的回归。发布工具独立验证：`python3 -B -m unittest discover -s tests/tools -v`，无ROS、无回环监听。
+
+## 三组运动预设（文档51）
+
+`motion_presets_protocol` 直接编译生产会话层，以独立 JSON peer 覆盖七种组合、增删预设、部分失败、过期、选择代际隔离和未知结果恢复，不需要 ROS 或本机端口。`control_v2_transport` 另验证连接能力发现及全局急停；`management_widget_flow` 另验证预设多选、空选择与能力门槛。使用及边界见 [Qt三组运动预设使用与验收](../../docs/Qt三组运动预设使用与验收.md)。

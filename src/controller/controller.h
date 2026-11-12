@@ -43,6 +43,10 @@ public:
     bool isTcpConnected() const;
     bool setOperatorControlEnabled(bool enabled);
     bool authorizeOperations();
+    bool setPendingPresets(const QJsonArray &ids);
+    bool startPresets(const QJsonArray &ids);
+    bool haltPresets(const QJsonArray &ids);
+    bool selectPresets(const QJsonArray &ids);
     bool recoverControlRequest(const QString &id);
     QJsonObject controlDiagnostics() const;
     QJsonObject diagnostics() const;

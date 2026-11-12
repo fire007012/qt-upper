@@ -581,7 +581,15 @@ void RobotTcpClient::handleConnected()
 
     LOG_INFO(MODULE, QString("成功连接到控制桥: %1").arg(getConnectionStatus()));
     auto *socket = m_socket;
-    if (m_controlV2) m_session.begin(m_expectedRobot, m_hostAddress + ':' + QString::number(m_port));
+    m_controlHelloStarted = false;
+    if (m_controlV2) {
+        // Give the server's connection capabilities frame a chance to arrive.
+        QTimer::singleShot(200, this, [this, socket] {
+            if (socket != m_socket || !isConnected() || m_controlHelloStarted) return;
+            m_controlHelloStarted = true;
+            m_session.begin(m_expectedRobot, m_hostAddress + ':' + QString::number(m_port));
+        });
+    }
     if (socket != m_socket || !isConnected()) return;
     emit connectedToROS();
     if (socket != m_socket || !isConnected()) return;
@@ -1319,6 +1327,12 @@ void RobotTcpClient::processReceivedData()
         const qint64 receivedAtMs = m_clock.elapsed();
         m_lastMessageReceivedMs = receivedAtMs;
 
+        if (m_controlV2 && msg["type"] == QJsonValue("capabilities") && !m_controlHelloStarted) {
+            m_controlHelloStarted = true;
+            const bool presets = msg["control_protocol_version"] == QJsonValue(2)
+                && msg["control_capabilities"].toArray().contains("motion_presets_v1");
+            m_session.begin(m_expectedRobot, m_hostAddress + ':' + QString::number(m_port), presets);
+        }
         if (m_controlV2 && msg["type"] == QJsonValue("control_result")) {
             m_session.receive(msg);
             continue;

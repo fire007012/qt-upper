@@ -26,6 +26,20 @@ private slots:
         QVERIFY(settings.isValid()); QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,settings.path());
         Utils::Logger::instance().setLogToConsole(false); Utils::Logger::instance().setLogToFile(false);
     }
+    void advertisedPresetsAreSentInFirstHandshake() {
+        ControlPeer peer; peer.presetsEnabled=true; RobotTcpClient client; client.setPendingPresets({"base","arm"}); start(peer,client);
+        QVERIFY(client.controlDiagnostics()["motion_presets_supported"].toBool());
+        QCOMPARE(peer.selectedPresets,QJsonArray({"base","arm"}));
+        int hellos=0; for(const auto &m:peer.messages) if(m["type"]==QJsonValue("control_hello")) { ++hellos; QVERIFY(m["capabilities"].toArray().contains("motion_presets_v1")); }
+        QCOMPARE(hellos,1);
+        client.sendEmergencyStop("preset-global-emergency");
+        QTRY_VERIFY(([&]{for(const auto &m:peer.messages) if(m["type"]==QJsonValue("emergency_stop")) return !m.contains("presets")&&!m.contains("groups"); return false;})());
+    }
+    void oldServerNeverStartsPresetFlow() {
+        ControlPeer peer; RobotTcpClient client; start(peer,client);
+        QVERIFY(!client.controlDiagnostics()["motion_presets_supported"].toBool()); QVERIFY(!client.startPresets({"base"}));
+        for(const auto &m:peer.messages) if(m["type"]==QJsonValue("control_hello")) QVERIFY(!m.contains("presets"));
+    }
     void legacyMessagesCannotGrantV2Authorization() {
         ControlPeer peer; RobotTcpClient client; start(peer,client);
         QVERIFY(!client.isOperatorControlEnabled());
