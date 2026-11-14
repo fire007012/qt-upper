@@ -46,7 +46,7 @@ private:
     QTimer *m_sendTimer;
 
     bool m_enabled;
-    static const int SEND_INTERVAL_MS = 100;  // 10Hz
+    static const int SEND_INTERVAL_MS = 33;  // approximately 30 Hz
 };
 
 #endif // KEYBOARDCONTROLLER_H

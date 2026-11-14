@@ -10,7 +10,7 @@ QStringList ControlProtocol::capabilities()
 }
 bool ControlProtocol::supportsSystemCommand(const QString &command)
 {
-    return QStringList{"init","enable","disable","halt","resume","recover","shutdown","set_control_mode","request_arm_named_targets","move_arm_named_target"}.contains(command);
+    return QStringList{"init","enable","disable","halt","resume","recover","shutdown","set_control_mode","set_speed_level","reset_global_stop","request_arm_named_targets","move_arm_named_target"}.contains(command);
 }
 QString ControlProtocol::unsupportedCommandReason(const QString &command)
 {

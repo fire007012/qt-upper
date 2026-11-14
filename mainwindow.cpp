@@ -149,15 +149,15 @@ MainWindow::MainWindow(QWidget *parent)
     setupConnections();
     setupStatusBar();
 
-    auto *runtimeDock = new QDockWidget(QStringLiteral("运行管理"), this);
+    auto *runtimeDock = new QDockWidget(QStringLiteral("一键启动"), this);
     auto *runtimeWidget = new RuntimeManagementWidget(runtimeDock);
     runtimeDock->setWidget(runtimeWidget);
-    runtimeDock->setMinimumWidth(460);
+    runtimeDock->setMinimumWidth(360);
     addDockWidget(Qt::RightDockWidgetArea, runtimeDock);
     runtimeDock->hide();
     auto *runtimeToolbar = addToolBar(QStringLiteral("系统管理"));
     auto *runtimeAction = runtimeDock->toggleViewAction();
-    runtimeAction->setText(QStringLiteral("运行管理 / 启动系统"));
+    runtimeAction->setText(QStringLiteral("一键启动"));
     runtimeToolbar->addAction(runtimeAction);
     auto *diagnosticsDock = new QDockWidget(QStringLiteral("控制与遥测诊断"), this);
     diagnosticsDock->setWidget(new DiagnosticsWidget(m_controller, diagnosticsDock));
@@ -178,24 +178,38 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_controller->setPendingPresets(runtimeWidget->pendingPresets());
     connect(runtimeWidget, &RuntimeManagementWidget::pendingPresetsChanged, m_controller, &Controller::setPendingPresets);
-    connect(runtimeWidget, &RuntimeManagementWidget::startPresetsRequested, this, [this](const QJsonArray &ids) {
-        if (!m_controller->startPresets(ids)) addError(QStringLiteral("[预设] 启动未提交：需预设能力、新鲜状态、无未决任务且急停已解除。"));
+    connect(runtimeWidget, &RuntimeManagementWidget::startPresetsRequested, this, [this, runtimeWidget](const QJsonArray &ids) {
+        if (!m_controller->startPresets(ids)) runtimeWidget->reportActionFailure(QStringLiteral("[预设] 启动未提交：需预设能力、新鲜状态、无未决任务且急停已解除。"));
     });
-    connect(runtimeWidget, &RuntimeManagementWidget::haltPresetsRequested, this, [this](const QJsonArray &ids) {
-        if (!m_controller->haltPresets(ids)) addError(QStringLiteral("[预设] 停止未提交，请检查已确认选择和未决任务。"));
+    connect(runtimeWidget, &RuntimeManagementWidget::haltPresetsRequested, this, [this, runtimeWidget](const QJsonArray &ids) {
+        if (!m_controller->haltPresets(ids)) runtimeWidget->reportActionFailure(QStringLiteral("[预设] 停止未提交，请检查已确认选择和未决任务。"));
     });
-    connect(runtimeWidget, &RuntimeManagementWidget::selectPresetsRequested, this, [this](const QJsonArray &ids) {
-        if (!m_controller->selectPresets(ids)) addError(QStringLiteral("[预设] 选择未提交：请归中；取消组须先停止并取得新鲜诊断。"));
+    connect(runtimeWidget, &RuntimeManagementWidget::selectPresetsRequested, this, [this, runtimeWidget](const QJsonArray &ids) {
+        if (!m_controller->selectPresets(ids)) runtimeWidget->reportActionFailure(QStringLiteral("[预设] 选择未提交：请归中；取消组须先停止并取得新鲜诊断。"));
     });
-    connect(runtimeWidget, &RuntimeManagementWidget::recoverPresetsRequested, this, [this](const QJsonArray &ids) {
+    connect(runtimeWidget, &RuntimeManagementWidget::recoverPresetsRequested, this, [this, runtimeWidget](const QJsonArray &ids) {
         if (!m_controller->sendSystemCommand(QStringLiteral("recover"), {{"presets",ids}}))
-            addError(QStringLiteral("[预设] 恢复未提交：请先归中并允许操作；只可恢复已确认选择的非空子集。"));
+            runtimeWidget->reportActionFailure(QStringLiteral("[预设] 恢复未提交：请先归中并允许操作；只可恢复已确认选择的非空子集。"));
     });
+    connect(runtimeWidget, &RuntimeManagementWidget::fieldCommandRequested, this, [this, runtimeWidget](const QString &command, const QJsonObject &params) {
+        if (!m_controller->sendSystemCommand(command, params)) runtimeWidget->reportActionFailure(QStringLiteral("[现场控制] 请求未提交：核对能力、归中、授权、急停和未决操作。"));
+    });
+    connect(runtimeWidget, &RuntimeManagementWidget::authorizeOperationsRequested, this, [this,runtimeWidget] {
+        if (!m_controller->authorizeOperations()) runtimeWidget->reportActionFailure(QStringLiteral("恢复操作授权未提交：请先解除急停、归中并等待中立输入确认。"));
+    });
+    connect(m_controller, &Controller::protocolMessageReceived, runtimeWidget, &RuntimeManagementWidget::observeControlEvent);
     auto *presetTimer = new QTimer(runtimeWidget);
     presetTimer->setInterval(100);
     connect(presetTimer, &QTimer::timeout, runtimeWidget, [this, runtimeWidget] {
         const auto diagnostics = m_controller->controlDiagnostics();
         runtimeWidget->setControlDiagnostics(diagnostics);
+        const auto actual = diagnostics["server"].toObject();
+        const auto globalStop = actual["global_stop"].toObject();
+        ui->btn_clear_emergency->setEnabled(diagnostics["global_stop_supported"].toBool() && diagnostics["ready"].toBool()
+            && actual["global_stop_reset_ready"] != QJsonValue(false)
+            && actual["runtime_fresh"].toBool() && actual["runtime_global_inhibit"] == QJsonValue(true)
+            && globalStop["state"] == QJsonValue("succeeded") && globalStop["ok"] == QJsonValue(true));
+        ui->btn_clear_emergency->setToolTip(QStringLiteral("确认急停原因已处理，独立禁止成功且反馈新鲜后，只清桥接锁存；随后仍需允许操作并显式复位 C++ 禁止。"));
         const bool anyDraft = !runtimeWidget->pendingPresets().isEmpty();
         if (m_operatorControlButton) m_operatorControlButton->setEnabled(anyDraft || m_operatorControlEnabled);
         if (m_operationsControlButton) m_operationsControlButton->setEnabled(anyDraft || m_operationsAuthorized);
@@ -1068,7 +1082,8 @@ void MainWindow::on_btn_emergency_stop_clicked()
 
 void MainWindow::on_btn_clear_emergency_clicked()
 {
-    addCommand("[急停] 请求解除急停");
+    if (QMessageBox::question(this, QStringLiteral("清除桥接急停锁存"), QStringLiteral("确认急停原因已经处理？此步骤仅清除桥接锁存，C++ 全局禁止仍保持；随后需单独允许操作并显式复位。"), QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) return;
+    addCommand("[急停] 请求清除桥接锁存（保留 C++ 全局禁止）");
 
     clearOperatorInputSnapshot();
     if (m_keyboardController) {
@@ -1719,24 +1734,8 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
                  status["emergency_active"].toBool() ? QStringLiteral("锁存") : QStringLiteral("已清除")));
         return;
     }
-    if (type == "control_operation") {
-        const auto op = message["operation"].toObject();
-        const auto id = op["request_id"].toString();
-        const auto summary = QStringLiteral("%1 / %2 / %3 / invalidated=%4").arg(op["command"].toString(), op["state"].toString(), op["error"].toString()).arg(op["invalidated"].toBool());
-        if (m_operationSummaries.value(id) != summary) {
-            if (m_operationSummaries.size() >= 64) m_operationSummaries.erase(m_operationSummaries.begin());
-            m_operationSummaries[id] = summary;
-            const auto text = QStringLiteral("[控制任务] %1 operation=%2 request=%3").arg(summary, op["operation_id"].toString(), id);
-            if (op["state"] == QJsonValue("failed") || op["state"] == QJsonValue("result_unknown") || op["invalidated"].toBool()) addError(text);
-            else addCommand(text);
-        }
-        return;
-    }
-    if (type == "control_notice") {
-        const auto text = message["code"].toString() + ": " + message["message"].toString();
-        if (text != m_lastControlNotice) { m_lastControlNotice = text; addError(QStringLiteral("[控制v2] ") + text); }
-        return;
-    }
+    // Full operation/notice records are persisted by the operator journal.
+    if (type == "control_operation" || type == "control_notice") return;
     if (type == "emergency_result") {
         const auto text = message["ok"].toBool() ? QStringLiteral("[急停] 桥接已锁存并发起停止；物理停止仍需独立确认。")
             : QStringLiteral("[急停] 请求结果未知：%1；请使用独立停止保障。").arg(message["error"].toString());

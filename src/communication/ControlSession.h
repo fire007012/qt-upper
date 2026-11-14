@@ -12,7 +12,7 @@ class ControlSession : public QObject {
     Q_OBJECT
 public:
     explicit ControlSession(QObject *parent = nullptr, std::function<qint64()> clock = {});
-    void begin(const QString &robotId, const QString &endpoint, bool motionPresets = false, const QString &role = QStringLiteral("control"));
+    void begin(const QString &robotId, const QString &endpoint, bool motionPresets = false, const QString &role = QStringLiteral("control"), const QJsonObject &discovery = {});
     void reset();
     bool setPendingPresets(const QJsonArray &presets);
     bool startPresets(const QJsonArray &presets);
@@ -25,6 +25,7 @@ public:
     bool input(const OperatorInputState &state);
     bool authorizeMotion();
     bool authorizeOperations();
+    bool requestSpeedLevel(const QJsonObject &params);
     bool clearEmergency();
     void emergencyIntent();
     void pause();
@@ -58,6 +59,7 @@ private:
         qint64 sentAt = 0, deadline = 0;
         bool physicalNeutral = false;
     };
+    void advanceSpeed();
     void advancePresets();
     void stopPresetFlow(const QString &reason);
     bool busy() const;
@@ -82,6 +84,13 @@ private:
     void saveRecord(const QString &id, const QJsonObject &record);
     void queryNextOperation();
     void notify(const QString &code, const QString &message = {});
+    QJsonArray m_capabilities;
+    QJsonObject m_speedControl;
+    int m_speedTarget = 0;
+    int m_refreshMs = 100;
+    QString m_speedRequest;
+    qint64 m_speedStatusAfter = -1;
+    qint64 m_speedDeadline = 0;
     bool m_presetAware = false, m_flow = false, m_flowStart = false, m_flowIssuing = false;
     QJsonArray m_desiredPresets{QStringLiteral("flippers"), QStringLiteral("base"), QStringLiteral("arm")};
     QJsonArray m_selectedPresets, m_selectedGroups, m_flowTarget;
@@ -98,6 +107,7 @@ private:
     qint64 m_started = -1, m_tokenUntil = -1, m_lastFresh = -1, m_lastStatus = -1;
     qint64 m_nextFresh = 0, m_nextStatus = 0, m_nextOperation = 0, m_inputSampleAt = -1, m_neutralAckAt = -1;
     bool m_active = false, m_motionAuthorized = false, m_operationsAuthorized = false;
+    bool m_stopIntent = false;
     bool m_physicalNeutral = false, m_permitted = false, m_emergency = true;
     bool m_tokenExpired = false, m_statusExpired = false;
     QHash<QString, Pending> m_pending;

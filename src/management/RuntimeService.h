@@ -9,9 +9,9 @@ public:
     explicit RuntimeService(QObject *parent = nullptr);
     void open(const QString &host, quint16 port, const QString &token);
     void close();
-    bool start(const QString &profile, const QString &revision);
+    bool start(const QString &profile, const QString &revision, const QJsonArray &presets = {});
     bool stop();
-    bool preflight(const QString &profile, const QString &revision);
+    bool preflight(const QString &profile, const QString &revision, const QJsonArray &presets = {});
     bool canStart() const;
     bool canStop() const;
     void refreshProfiles() { m_refreshProfiles = true; }

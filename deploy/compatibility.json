@@ -1,5 +1,5 @@
 {
-  "host_build_version": "host-ros2-v2-presets-2",
+  "host_build_version": "host-ros2-v2-field-1",
   "management_protocol_version": 1,
   "control_protocol_version": 2,
   "control_capabilities": [
@@ -15,7 +15,8 @@
     39,
     40,
     41,
-    51
+    51,
+    52
   ],
   "tested_host_platform": "Ubuntu 22.04.5 x86_64 Qt6.12",
   "release_target": "Linux x86_64",
@@ -31,11 +32,26 @@
   "windows_validated": false,
   "physical_acceptance": false,
   "optional_control_capabilities": [
-    "motion_presets_v1"
+    "motion_presets_v1",
+    "speed_level_v1",
+    "latched_global_stop_v1"
   ],
   "motion_presets_acceptance": {
     "independent_protocol_mock": true,
     "qt_robot_integration": false,
+    "physical_acceptance": false
+  },
+  "field_control_acceptance": {
+    "target_robot_build": "robot24-field-control-2",
+    "independent_protocol_mock": true,
+    "qt_robot_integration": false,
+    "physical_acceptance": false
+  },
+  "installed_ros_mock_acceptance": {
+    "qt_management_and_control": true,
+    "full_ros_packages_built": 37,
+    "measured_mock_wheel_motion": true,
+    "global_stop_readiness_field": "global_stop_reset_ready",
     "physical_acceptance": false
   }
 }

@@ -6,9 +6,13 @@
 
 > 当前生产Qt使用控制v2（文档40），管理服务独立使用v1（文档39/41）。使用和恢复见[Qt控制v2与诊断](docs/Qt控制v2与诊断使用.md)，版本见[兼容声明](deploy/compatibility.json)。下文保留v1遥测/相机报文及旧控制基线；其中旧运动写入与ACK授权不能用于当前v2。
 
-控制v2请求用 `protocol_version:2`、`request_id`、session_id/epoch；输入及授权/业务写请求附递增seq、freshness_token和ttl_ms。响应为 `control_result`，回显request_id/seq及ok/result或error.code。token每100ms刷新，最多300ms有效；会话租约1500ms，watchdog至多500ms。Qt用本地单调发送时刻扣除RTT，过期必须重新采样，不重放旧输入。
+控制v2请求用 `protocol_version:2`、`request_id`、session_id/epoch；输入及授权/业务写请求附递增seq、freshness_token和ttl_ms。响应为 `control_result`，回显request_id/seq及ok/result或error.code。token按服务端refresh_ms刷新（当前通常100ms），最多300ms有效；会话租约1500ms，watchdog至多500ms。Qt用本地单调发送时刻扣除RTT，过期必须重新采样，不重放旧输入。
 
 两级授权分别为authorize_operations和authorize；实际runtime许可未知或过期时不能运动。业务命令通过有界异步operation查询完成状态，accepted不等于成功；未知接受只能显式原ID恢复。独立急停响应包含 `physical_stop_confirmed:false`，不能代替硬件停止证据。旧v1心跳、同步、相机只读接口用于观测，不得改变v2授权。
+
+控制 v2 现场增量（文档52）：客户端额外声明 `speed_level_v1` 和 `latched_global_stop_v1`，缺少能力时禁用对应新增操作并提示更新。换档仅用 `system_command set_speed_level`、`params:{"level":1..5}`，连续输入不携带档位或数字按键；必须新中立、操作授权、异步终态及实际档位读回，随后重新显式授权。服务端速度声明原样展示，不在 Qt 推测限值。
+
+独立 `emergency_stop` 仅表示锁存与请求；查询 `global_stop` 和 `safety_halt` 分别展示独立禁止和普通清理，结合新鲜 `runtime_global_inhibit` 判断当前软件禁止。显式 `clear_emergency` 无需操作授权且仅清桥接锁存，`runtime_release_required:true` 后需重新中立/操作授权，显式提交 `system_command reset_global_stop`、`params:{}`。复位不恢复运动，重连不自动复位。三类 `safety_conditions` 的 unknown/expired/stale 不表示已安全。完整操作、修改文件及部署见 [Qt 实车联调控制 v2](docs/Qt实车联调控制v2使用与验收.md)。
 
 ## 通用帧约束
 
@@ -627,3 +631,9 @@ ROS2 桥接从 `/robot_runtime/state` 的运行状态 JSON 提取关节状态，
 管理路径连接控制桥时额外核对 sync_request、readonly_monitor、monotonic_watchdog、connection_control_owner 四项 capabilities.supports，能力未确认时不能允许遥控，缺失时关闭连接。心跳与匹配状态快照仍须分别通过。服务端 protocol_error/code=2110 表示另一连接持有控制权，客户端撤销本地遥控；不自动抢占或重新授权。
 
 这些 v1 能力不包含显式 session_id/freshness token 或完整租约；旧输入积压与慢服务可靠性仍待双方升级协议并验收。管理操作 accepted 仅代表接收，只有查询任务及实际快照才能确认软件结果；软件 ready 不能代替运动授权。
+
+## 五、2026-11-14 控制 v2 联动增量
+
+当前联动使用管理 v1、控制 v2。`control_status.result.global_stop_reset_ready` 为可选布尔字段，反映下位机对新鲜诊断、所有者心跳、C++ 禁止、组状态/操作和普通 halt 清理完成情况的判断。字段为 false 时，上位机等待后再明确提交清除急停或复位；它不表示机械停止已确认。省略字段的旧控制 v2 服务沿用既有门槛，不静默升级安全声明。`reset_global_stop` 在清理未结束时返回 `RUNTIME_NOT_SETTLED`，不会自动重发或恢复运动。
+
+完整安装栈与本地 Mock 启动方法见 [联动交付记录](docs/上下位机联动交付记录.md)。

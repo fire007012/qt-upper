@@ -8,6 +8,29 @@
 using namespace Communication;
 
 #include "control_peer.h"
+class BusyControlPeer : public ControlPeer {
+public:
+    QJsonObject operation;
+    int queries = 0;
+    bool stopped = false;
+    void handle(QTcpSocket *socket,const QJsonObject &m) override {
+        const auto type=m["type"].toString();
+        if(type=="system_command") {
+            operation={{"operation_id","busy-op"},{"request_id",m["request_id"]},{"robot_id",identity},{"epoch","epoch-A"},
+                {"command",m["command"]},{"state","accepted"},{"created_at",123},{"invalidated",false},
+                {"error",QJsonValue(QJsonValue::Null)},{"result",QJsonValue(QJsonValue::Null)}};
+            reply(socket,m,operation);
+        } else if(type=="operation_query") { ++queries; auto op=operation; op["state"]="running"; reply(socket,m,op); }
+        else if(type=="emergency_stop") {
+            stopped=true; reply(socket,m,{{"emergency_active",true},{"global_stop_requested",true},{"physical_stop_confirmed",false}});
+        } else if(type=="control_status" && stopped) {
+            reply(socket,m,{{"epoch","epoch-A"},{"authorized",false},{"motion_permitted",false},{"emergency_active",true},{"counts",QJsonObject{}},{"queue_depth",1},
+                {"runtime_fresh",true},{"runtime_global_inhibit",true},
+                {"global_stop",QJsonObject{{"state","result_unknown"},{"ok",false}}},
+                {"safety_halt",QJsonObject{{"state","failed"},{"message","OPERATIONS_BUSY"}}}});
+        } else ControlPeer::handle(socket,m);
+    }
+};
 class ControlTransportTest : public QObject {
     Q_OBJECT
     QTemporaryDir settings;
@@ -25,6 +48,24 @@ private slots:
     void initTestCase() {
         QVERIFY(settings.isValid()); QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,settings.path());
         Utils::Logger::instance().setLogToConsole(false); Utils::Logger::instance().setLogToFile(false);
+    }
+    void busyLifecycleDoesNotBlockEmergencyHeartbeatOrQueries_data() {
+        QTest::addColumn<QString>("command"); QTest::newRow("init") << QString("init"); QTest::newRow("enable") << QString("enable");
+    }
+    void busyLifecycleDoesNotBlockEmergencyHeartbeatOrQueries() {
+        QFETCH(QString,command); BusyControlPeer peer; RobotTcpClient client; start(peer,client);
+        bool authorized=false; QTRY_VERIFY(([&]{if(!authorized)authorized=client.authorizeOperations();return authorized;})());
+        QTRY_VERIFY(client.controlDiagnostics()["operations_authorized"].toBool());
+        QVERIFY(client.sendSystemCommand(command)); QTRY_VERIFY(!peer.operation.isEmpty());
+        QTRY_VERIFY(peer.queries>0); const int before=peer.queries;
+        QSignalSpy events(&client,&RobotTcpClient::systemStatusReceived); QVERIFY(client.sendEmergencyStop("busy-operation"));
+        QTRY_VERIFY(peer.stopped); QTRY_VERIFY(peer.acceptedConnections>=2);
+        QTRY_VERIFY(peer.queries>before); QTRY_VERIFY(client.getStats().lastHeartbeatAckMs>0);
+        QTRY_VERIFY(client.controlDiagnostics()["server"].toObject()["global_stop"].toObject()["state"]==QJsonValue("result_unknown"));
+        QVERIFY(!client.isOperatorControlEnabled()); QVERIFY(!client.sendSystemCommand("clear_emergency"));
+        bool physical=false;
+        for(const auto &args:events) physical |= args[0].toJsonObject()["physical_stop_confirmed"].toBool();
+        QVERIFY(!physical);
     }
     void advertisedPresetsAreSentInFirstHandshake() {
         ControlPeer peer; peer.presetsEnabled=true; RobotTcpClient client; client.setPendingPresets({"base","arm"}); start(peer,client);

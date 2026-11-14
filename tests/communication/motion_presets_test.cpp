@@ -15,7 +15,8 @@ public:
     bool omitDiagnostics = false;
     QList<QJsonObject> queue, wire, commands;
     QHash<QString,QJsonObject> ops;
-    QString epoch = "e1", failure;
+    QString epoch = "e1", failure, rejectEpochCommand;
+    bool rejectedEpoch = false;
     int generation = 1, selections = 0;
     bool fresh = true, invalidated = false, unknown = false, drop = false;
     PresetPeer() { QObject::connect(&client,&ControlSession::outbound,&client,[this](const QJsonObject &m){ queue.append(m); wire.append(m); }); }
@@ -45,6 +46,9 @@ public:
         int budget = 100;
         while (!queue.isEmpty() && --budget) {
             const auto m = queue.takeFirst(); const auto type = m["type"].toString();
+            if (type == "system_command" && m["command"] == QJsonValue(rejectEpochCommand) && !rejectedEpoch) {
+                rejectedEpoch = true; epoch = "e"+QString::number(++generation);
+            }
             if (type != "control_hello" && type != "control_status" && m["epoch"] != QJsonValue(epoch)) {
                 client.receive({{"type","control_result"},{"protocol_version",2},{"request_id",m["request_id"]},
                     {"seq",m.contains("seq")?m["seq"]:QJsonValue(QJsonValue::Null)},{"ok",false},{"error",QJsonObject{{"code","EPOCH"}}}});
@@ -99,6 +103,28 @@ private slots:
         QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,settings.path());
     }
     void init() { QSettings("HostComputer","ControlV2").clear(); }
+    void epochBeforeEachLifecycleStep_data() {
+        QTest::addColumn<QString>("command");
+        for(const auto &command:QStringList{"init","enable","resume"}) QTest::newRow(qPrintable(command)) << command;
+    }
+    void epochBeforeEachLifecycleStep() {
+        QFETCH(QString,command); PresetPeer peer; peer.rejectEpochCommand=command; peer.begin({"base"});
+        QVERIFY(peer.client.startPresets({"base"})); peer.finish();
+        QVERIFY(peer.rejectedEpoch); QVERIFY2(peer.client.motionAuthorized(),qPrintable(QString::fromUtf8(QJsonDocument(peer.client.diagnostics()).toJson())));
+        QCOMPARE(peer.commands.size(),3); // Each lifecycle action executes once.
+        int sent=0; for(const auto &m:peer.wire) if(m["command"]==QJsonValue(command)) ++sent;
+        QCOMPARE(sent,2); // Only the explicitly rejected attempt is rebuilt.
+    }
+    void unknownEnableAndResumeNeverReissue_data() {
+        QTest::addColumn<QString>("state"); QTest::newRow("enable") << QString("Initialized"); QTest::newRow("resume") << QString("Armed");
+    }
+    void unknownEnableAndResumeNeverReissue() {
+        QFETCH(QString,state); PresetPeer peer; peer.states["base"]=state; peer.unknown=true; peer.begin({"base"});
+        QVERIFY(peer.client.startPresets({"base"})); peer.finish();
+        for(int i=0;i<25;++i) peer.tick();
+        QCOMPARE(peer.commands.size(),1); QVERIFY(!peer.client.motionAuthorized());
+        QCOMPARE(peer.client.operations()[0].toObject()["state"],QJsonValue("result_unknown"));
+    }
     void combinations_data() {
         QTest::addColumn<QJsonArray>("ids");
         for (int mask=1;mask<8;++mask) { QJsonArray ids; for(int i=0;i<3;++i) if(mask&(1<<i)) ids.append(QJsonArray{"flippers","base","arm"}[i]); QTest::newRow(qPrintable(QString::number(mask))) << ids; }

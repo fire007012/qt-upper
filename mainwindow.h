@@ -150,8 +150,6 @@ private:
     QLabel* m_controlPermissionLabel = nullptr;
     bool m_operationsAuthorized = false;
     QElapsedTimer m_emergencyDebounce;
-    QHash<QString, QString> m_operationSummaries;
-    QString m_lastControlNotice;
     QLabel* m_connectionPhaseLabel = nullptr;
     bool m_operatorControlEnabled = false;
     QString m_lastOperatorInputStatus;

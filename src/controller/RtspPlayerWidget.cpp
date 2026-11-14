@@ -125,6 +125,9 @@ RtspPlayerWidget::~RtspPlayerWidget()
 {
     m_clockTimer->stop();
     m_frameTimer->stop();
+    // The child decoder calls stop() again from its destructor, after this
+    // derived widget has been destroyed. Do not leave callbacks to its slots.
+    disconnect(m_decoder, nullptr, this, nullptr);
     m_decoder->stop();
 }
 

@@ -5,7 +5,7 @@
 namespace Communication {
 class ControlProtocol {
 public:
-    static constexpr const char *HostBuildVersion = "host-ros2-v2-presets-2";
+    static constexpr const char *HostBuildVersion = "host-ros2-v2-field-1";
     static QStringList capabilities();
     static bool supportsSystemCommand(const QString &command);
     static QString unsupportedCommandReason(const QString &command);

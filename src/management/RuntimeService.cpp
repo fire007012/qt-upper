@@ -97,7 +97,7 @@ bool RuntimeService::canStart() const
         && (state == "stopped" || state == "failed");
 }
 bool RuntimeService::canStop() const { return canQuery() && m_reconciled && !m_running; }
-bool RuntimeService::start(const QString &profile, const QString &revision)
+bool RuntimeService::start(const QString &profile, const QString &revision, const QJsonArray &presets)
 {
     if (!canStart() || profile.isEmpty() || revision.isEmpty()) return false;
     // The server performs preflight within start. Do not duplicate cold-only preflight on running systems.
@@ -105,7 +105,9 @@ bool RuntimeService::start(const QString &profile, const QString &revision)
     m_reconciled = false;
     m_endpoint.clear();
     emit controlUnavailable();
-    const bool sent = m_client.request("start", {{"robot_id", m_robotId}, {"profile_id", profile}, {"config_revision", revision}});
+    QJsonObject params{{"robot_id", m_robotId}, {"profile_id", profile}, {"config_revision", revision}};
+    if (!presets.isEmpty()) params["presets"] = presets;
+    const bool sent = m_client.request("start", params);
     emit availabilityChanged();
     return sent;
 }
@@ -120,11 +122,13 @@ bool RuntimeService::stop()
     emit availabilityChanged();
     return sent;
 }
-bool RuntimeService::preflight(const QString &profile, const QString &revision)
+bool RuntimeService::preflight(const QString &profile, const QString &revision, const QJsonArray &presets)
 {
     if (!canStart()) return false;
     m_poll.stop();
-    const bool sent = m_client.request("preflight", {{"robot_id", m_robotId}, {"profile_id", profile}, {"config_revision", revision}});
+    QJsonObject params{{"robot_id", m_robotId}, {"profile_id", profile}, {"config_revision", revision}};
+    if (!presets.isEmpty()) params["presets"] = presets;
+    const bool sent = m_client.request("preflight", params);
     emit availabilityChanged();
     return sent;
 }

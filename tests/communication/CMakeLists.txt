@@ -74,6 +74,9 @@ if(HOST_BUILD_WIDGET_TESTS)
         ${HOST_ROOT}/src/management/RuntimeService.h
         ${HOST_ROOT}/src/management/RuntimeManagementWidget.cpp
         ${HOST_ROOT}/src/management/RuntimeManagementWidget.h
+        ${HOST_ROOT}/src/management/RuntimeJournal.cpp
+        ${HOST_ROOT}/src/communication/ControlProtocol.cpp
+        ${HOST_ROOT}/src/communication/HostProtocol.cpp
         ${HOST_ROOT}/src/management/ConfigurationService.cpp
         ${HOST_ROOT}/src/management/ConfigurationService.h
         ${HOST_ROOT}/src/management/ConfigurationWidget.cpp
@@ -93,6 +96,14 @@ if(HOST_BUILD_WIDGET_TESTS)
     add_test(NAME keyboard_physical_neutral COMMAND keyboard_safety_test)
     set_tests_properties(keyboard_physical_neutral PROPERTIES TIMEOUT 10)
 endif()
+
+add_executable(runtime_journal_test runtime_journal_test.cpp
+    ${HOST_ROOT}/src/management/RuntimeJournal.cpp
+    ${HOST_ROOT}/src/communication/ControlProtocol.cpp
+    ${HOST_ROOT}/src/communication/HostProtocol.cpp)
+target_link_libraries(runtime_journal_test PRIVATE Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)
+add_test(NAME runtime_journal_persistence COMMAND runtime_journal_test)
 
 # Optional read-only contract runner; never starts a robot service by itself.
 add_executable(manager_reference_probe
@@ -142,3 +153,16 @@ target_include_directories(motion_presets_test PRIVATE ${HOST_ROOT}/src/communic
 target_link_libraries(motion_presets_test PRIVATE Qt${QT_VERSION_MAJOR}::Core Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)
 add_test(NAME motion_presets_protocol COMMAND motion_presets_test)
 set_tests_properties(motion_presets_protocol PROPERTIES TIMEOUT 30)
+
+# Explicit installed ROS mock integration; never registered in default CTest.
+add_executable(installed_robot_probe installed_robot_probe.cpp ${HOST_CONTROL_SOURCES}
+    ${HOST_ROOT}/src/communication/RobotTcpClient.cpp
+    ${HOST_ROOT}/src/communication/HostProtocol.cpp
+    ${HOST_ROOT}/src/communication/ManagementClient.cpp
+    ${HOST_ROOT}/src/management/RuntimeService.cpp
+    ${HOST_ROOT}/src/utils/Logger.cpp
+    ${HOST_ROOT}/src/utils/ErrorHandler.cpp)
+target_include_directories(installed_robot_probe PRIVATE
+    ${HOST_ROOT}/src/communication ${HOST_ROOT}/src/management ${HOST_ROOT}/src/utils)
+target_link_libraries(installed_robot_probe PRIVATE Qt${QT_VERSION_MAJOR}::Core
+    Qt${QT_VERSION_MAJOR}::Network Qt${QT_VERSION_MAJOR}::Test)

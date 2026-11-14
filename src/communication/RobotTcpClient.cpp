@@ -372,7 +372,11 @@ bool RobotTcpClient::sendEmergencyStop(const QString &source)
 
 bool RobotTcpClient::sendSystemCommand(const QString &command, const QJsonObject &params)
 {
-    if (m_controlV2) return command == "clear_emergency" ? m_session.clearEmergency() : m_session.command(command, params);
+    if (m_controlV2) {
+        if (command == "clear_emergency") return params.isEmpty() && m_session.clearEmergency();
+        if (command == "set_speed_level") return m_session.requestSpeedLevel(params);
+        return m_session.command(command, params);
+    }
     if (command == QStringLiteral("move_arm_named_target") && !m_operatorControlEnabled) return false;
     if (command == QStringLiteral("halt") || command == QStringLiteral("disable")
         || command == QStringLiteral("shutdown") || command == QStringLiteral("recover")) {
@@ -581,6 +585,7 @@ void RobotTcpClient::handleConnected()
 
     LOG_INFO(MODULE, QString("成功连接到控制桥: %1").arg(getConnectionStatus()));
     auto *socket = m_socket;
+    socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
     m_controlHelloStarted = false; m_capabilityDiscovery = "waiting";
     if (m_controlV2) {
         // The server allows three seconds for hello. Never infer full-vehicle
@@ -1336,7 +1341,7 @@ void RobotTcpClient::processReceivedData()
             }
             m_controlHelloStarted = true; m_capabilityDiscovery = "declared";
             const bool presets = msg["control_capabilities"].toArray().contains("motion_presets_v1");
-            m_session.begin(m_expectedRobot, m_hostAddress + ':' + QString::number(m_port), presets);
+            m_session.begin(m_expectedRobot, m_hostAddress + ':' + QString::number(m_port), presets, QStringLiteral("control"), msg);
         }
         if (m_controlV2 && msg["type"] == QJsonValue("control_result")) {
             m_session.receive(msg);

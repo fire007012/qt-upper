@@ -50,6 +50,7 @@ def main():
     from geometry_msgs.msg import Twist
     from std_msgs.msg import String
     from std_srvs.srv import Trigger
+    from robot_hardware.srv import GroupOperation
 
     sys.path.insert(0, str(bridge.parent))
     spec = importlib.util.spec_from_file_location('host_ros2_reference_bridge', bridge)
@@ -77,6 +78,20 @@ def main():
         response.success = True; response.message = 'mock ROS2 halt completed'; return response
     node.create_service(Trigger, '/host_test_runtime/init', init, callback_group=callbacks)
     node.create_service(Trigger, '/host_test_runtime/halt', halt, callback_group=callbacks)
+    def group_operation(request, response):
+        assert request.operation == 'init', request.operation
+        calls['init'] += 1; call_times.append(('init', time.monotonic()))
+        time.sleep(3)
+        response.success = True; response.operation_id = 'mock-group-init'
+        response.message = 'mock ROS2 group init completed'
+        return response
+    node.create_service(GroupOperation, '/robot_runtime/group_operation', group_operation,
+                        callback_group=callbacks)
+    def global_stop(request, response):
+        state['diagnostics']['global_inhibit'] = True
+        response.success = True; response.message = 'mock global inhibit only'
+        return response
+    node.create_service(Trigger, '/robot_runtime/global_stop', global_stop, callback_group=callbacks)
     node.create_subscription(Twist, '/host_test/cmd_vel', lambda msg: outputs.append((time.monotonic(), msg.linear.x)),
                              100, callback_group=callbacks)
     publisher = node.create_publisher(String, '/robot_runtime/state', 1)

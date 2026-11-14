@@ -51,7 +51,7 @@ public:
             {"seq",request.contains("seq")?request["seq"]:QJsonValue(QJsonValue::Null)},{"ok",true},{"result",value}});
     }
     QJsonObject token() const {return {{"epoch","epoch-A"},{"freshness_token","peer-token"},{"valid_for_ms",300},{"refresh_ms",100},{"input_ttl_ms",300},{"lease_ms",1500},{"watchdog_ms",500}};}
-    void handle(QTcpSocket *socket,const QJsonObject &m) {
+    virtual void handle(QTcpSocket *socket,const QJsonObject &m) {
         const auto type=m["type"].toString();
         if(type=="heartbeat") send(socket,{{"type","heartbeat_ack"},{"seq",m["seq"]},{"protocol_version",1}});
         else if(type=="sync_request") send(socket,{{"type","system_snapshot"},{"seq",m["seq"]},{"emergency",QJsonObject{{"active",false}}}});

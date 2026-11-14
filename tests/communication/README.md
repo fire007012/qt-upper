@@ -102,6 +102,8 @@ python3 -B tests/communication/control_reference_integration.py \
 
 这些契约只验证模拟输出。物理断网、真实ROS2/设备、跨机器校时及完整视频隔离必须另行验收。UI进程8秒存活也仅证明创建及事件循环，不证明Quick3D、手柄或视频。
 
+当前同级目录布局的联动步骤见 [上下位机联动排查与启动](../../docs/上下位机联动排查与启动.md)。只读契约的参考路径应显式使用 `/home/fire/ros2_ws_car/src/...`，不要求将下位机复制进上位机仓库。ROS2 临时接口覆盖层现在同时生成 `SetProfile`、`GroupOperation` 和 `ExecuteArmGoal`，支持已协商的分组控制；缺失分组服务不能当作 lifecycle 服务已通过。视频专项新增 `video_widget_lifecycle`，直接验证生产播放器销毁及显式停止后销毁，覆盖子解码器析构发出停止信号的情况。
+
 本地发布证据：`python3 -B scripts/check_host_release.py --binary /tmp/hostcomputer-qt6-build/hostcomputer --output /tmp/hostcomputer-release-check.json`。脚本检查构建标识/Qt6、本机动态依赖和FFmpeg并记录二进制SHA256，不将本机环境检查等同干净机器/Windows发布验收。
 
 ## 发布与Linux联调
@@ -128,3 +130,24 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/hostcomputer-communication-qt5-f
 ```
 
 该命令不构建 Qt5 完整应用，不启动 ROS 或硬件。实际 Qt5 安装路径按平台调整。
+
+## 文档52现场控制增量（2026-11-13）
+
+`control_v2_session` 增加可选能力门槛、原始服务端速度声明、严格档位校验、中立/授权换档流程、invalidated 成功后的实际读回、未知换档原 ID 恢复、全局禁止失败保持锁存、显式 clear/reset 分离、旧状态及重连不能解除本地急停、服务端 refresh_ms 调度。`motion_presets_protocol` 在 init/enable/resume 前逐步注入 EPOCH 拒绝，核对同步后仅重建明确未执行的请求，并验证 enable/resume 未知结果不重复执行。
+
+`control_v2_transport` 在 init/enable 操作保持 running 期间验证独立急停、心跳和 operation_query；`management_widget_flow` 验证能力门槛、实际档位、当前禁止标志优先于历史 RPC、物理条件 unknown/expired/stale 和过期反馈展示。测试服务不接触 ROS/CAN，不构成机械停止验收。操作和部署见 [Qt实车联调控制v2](../../docs/Qt实车联调控制v2使用与验收.md)。
+
+## 完整安装栈联动（2026-11-14）
+
+`installed_robot_probe` 不注册默认 CTest。它使用生产 Qt 管理/控制层启动真实 ROS2 Mock 整车，经真实桥接操作预设、换档、急停及显式解除，验证操作终态和实际读回，再停止软件。Python runner 在域 197 监听模拟测量轮速，使用独立临时端口、令牌和 journal，拒绝 hardware 档案。必须先完成完整安装及本地 Mock 配置准备，不能使用仅接口的测试 overlay。
+
+```bash
+source /home/fire/ros2_ws_car/linked-install/setup.bash
+python3 -B tests/communication/installed_reference_integration.py \
+  --config /home/fire/ros2_ws_car/linked-runtime/manager.json \
+  --manager /home/fire/ros2_ws_car/src/robot_manager/manager.py \
+  --probe /tmp/host-link-tests/installed_robot_probe \
+  --output-dir /tmp/host-link-installed-new-run
+```
+
+输出目录必须是新目录。该测试与其他占用桥接调试端口 18080 的整车/视频用例顺序执行；测试允许回环 DDS/TCP。新增 `global_stop_reset_ready` 的回归核对普通清理期间不提交解除/复位，未修改未知结果和物理停止的验收边界。

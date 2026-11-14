@@ -21,23 +21,30 @@ def main():
             raise ValueError('choose a new fixture output directory')
         source = args.reference_src.resolve(strict=True)
         definitions = [(name, relative, (source / name / relative).read_bytes()) for name, relative in (
-            ('robot_hardware', 'srv/SetProfile.srv'), ('arm_control', 'action/ExecuteArmGoal.action'))]
+            ('robot_hardware', 'srv/SetProfile.srv'),
+            ('robot_hardware', 'srv/GroupOperation.srv'),
+            ('arm_control', 'action/ExecuteArmGoal.action'))]
     except (OSError, ValueError) as error:
         parser.error(str(error))
     output.mkdir(parents=True)
     manifest = dict(scope='mock_interface_types_only', production_overlay=False, files={})
-    for name, relative, content in definitions:
+    for name in dict.fromkeys(name for name, _, _ in definitions):
         package = output / 'src' / name
-        target = package / relative; target.parent.mkdir(parents=True)
-        target.write_bytes(content)
-        manifest['files'][f'{name}/{relative}'] = hashlib.sha256(content).hexdigest()
+        interfaces = []
+        for owner, relative, content in definitions:
+            if owner != name:
+                continue
+            target = package / relative; target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            interfaces.append('"' + relative + '"')
+            manifest['files'][f'{name}/{relative}'] = hashlib.sha256(content).hexdigest()
         dependency = 'find_package(geometry_msgs REQUIRED)\n' if name == 'arm_control' else ''
         rosidl_dependency = ' DEPENDENCIES geometry_msgs' if name == 'arm_control' else ''
         (package / 'CMakeLists.txt').write_text(f'''cmake_minimum_required(VERSION 3.16)
 project({name})
 find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
-{dependency}rosidl_generate_interfaces(${{PROJECT_NAME}} "{relative}"{rosidl_dependency})
+{dependency}rosidl_generate_interfaces(${{PROJECT_NAME}} {' '.join(interfaces)}{rosidl_dependency})
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()
 ''')

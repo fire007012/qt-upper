@@ -54,6 +54,16 @@ def scenario(args, case):
             if case == 'slowBackendAndIndependentEmergency' and command == 'init':
                 self.release.wait(30)
             return True, 0, 'fixture only'
+        def call_global_stop(self):
+            self.runtime_state['diagnostics']['global_inhibit'] = True
+            for name in self.runtime_state['groups']:
+                self.runtime_state['groups'][name] = 'Halted'
+                self.runtime_state['diagnostics']['groups'][name]['state'] = 3
+            return True, 0, 'fixture global inhibit; no hardware'
+        def call_group_operation(self, command, groups):
+            ok, _, message = self.call_lifecycle(command)
+            return dict(success=ok, operation_id='', message=message,
+                        groups=list(groups), operation=command)
 
     with tempfile.TemporaryDirectory(prefix='host-control-contract-') as folder:
         output = Capture()

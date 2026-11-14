@@ -24,7 +24,8 @@ bool EmergencyChannel::send(const QString &host, quint16 port, const QString &so
     socket->setReadBufferSize(65537);
     connect(socket, &QTcpSocket::connected, this, [this, socket, source] {
         if (socket != m_socket) return;
-        const auto frame = QJsonDocument(QJsonObject{{"type", "emergency_stop"}, {"protocol_version", 2}, {"request_id", m_id},
+        socket->setSocketOption(QAbstractSocket::LowDelayOption, 1);
+        const auto frame = QJsonDocument(QJsonObject{{"type", "emergency_stop"}, {"protocol_version", 2}, {"seq", 1}, {"request_id", m_id},
             {"params", QJsonObject{{"source", source.left(128)}}}}).toJson(QJsonDocument::Compact) + '\n';
         if (socket->write(frame) != frame.size()) finish(false, "EMERGENCY_SEND_FAILED");
     });

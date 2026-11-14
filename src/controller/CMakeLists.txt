@@ -24,6 +24,8 @@ set(CONTROLLER_SOURCES
     ../management/RuntimeService.h
     ../management/RuntimeManagementWidget.cpp
     ../management/RuntimeManagementWidget.h
+    ../management/RuntimeJournal.cpp
+    ../management/RuntimeJournal.h
     controller.cpp
     controller.h
     CameraGridWidget.cpp

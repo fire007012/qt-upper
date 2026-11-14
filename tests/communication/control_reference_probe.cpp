@@ -23,6 +23,13 @@ class ControlReferenceTest : public QObject {
         QTRY_VERIFY(client.controlDiagnostics()["operations_authorized"].toBool());
         if(motion) { bool sent=false; QTRY_VERIFY(([&]{if(!sent)sent=client.setOperatorControlEnabled(true);return sent;})()); QTRY_VERIFY(client.isOperatorControlEnabled()); }
     }
+    void sendSample(RobotTcpClient &client, const OperatorInputState &input) {
+        // A neutral sample may still be awaiting its ACK when authorization
+        // completes. Wait for the bounded input slot instead of assuming that
+        // another frame can be sent immediately in the same event-loop turn.
+        bool sent=false;
+        QTRY_VERIFY(([&]{if(!sent)sent=client.sendOperatorInput(input);return sent;})());
+    }
 private slots:
     void initTestCase() {
         QVERIFY(settings.isValid());
@@ -34,11 +41,11 @@ private slots:
         RobotTcpClient client; OperatorInputState input; start(client,input);
         QVERIFY(!client.isOperatorControlEnabled()); QVERIFY(!client.sendSystemCommand("init"));
         authorize(client); const auto epoch=client.controlDiagnostics()["epoch"].toString();
-        input.keyboard.pressedKeys=QStringList{"w"}; QVERIFY(client.sendOperatorInput(input));
+        input.keyboard.pressedKeys=QStringList{"w"}; sendSample(client,input);
         QTRY_VERIFY(client.controlDiagnostics()["epoch"].toString()!=epoch);
         QVERIFY(!client.isOperatorControlEnabled()); QVERIFY(!client.controlDiagnostics()["operations_authorized"].toBool());
         input={}; QTRY_VERIFY(client.controlDiagnostics()["ready"].toBool());
-        authorize(client); input.keyboard.pressedKeys=QStringList{"w"}; QVERIFY(client.sendOperatorInput(input));
+        authorize(client); input.keyboard.pressedKeys=QStringList{"w"}; sendSample(client,input);
         QSignalSpy events(&client,&RobotTcpClient::systemStatusReceived);
         QVERIFY(client.sendEmergencyStop("reference-probe"));
         QTRY_VERIFY(!client.isOperatorControlEnabled());
@@ -66,7 +73,8 @@ private slots:
     }
     void slowBackendAndIndependentEmergency() {
         RobotTcpClient client; OperatorInputState input; start(client,input); authorize(client);
-        input.keyboard.pressedKeys=QStringList{"w"}; QVERIFY(client.sendOperatorInput(input));
+        input.keyboard.pressedKeys=QStringList{"w"}; sendSample(client,input);
+        QTest::qWait(100); // Observe motion before init revokes preset input.
         QVERIFY(client.sendSystemCommand("init"));
         QTRY_COMPARE(lastOperation(client)["state"].toString(),QString("running"));
         const auto before=client.getStats().messagesReceived;
