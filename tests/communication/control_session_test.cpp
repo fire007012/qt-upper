@@ -59,6 +59,30 @@ class ControlSessionTest : public QObject {
     Q_OBJECT
     QTemporaryDir directory;
 private slots:
+    void selectedInputSourceFiltersMotionWithoutFakingPhysicalNeutral() {
+        OperatorInputState input;
+        input.keyboard.pressedKeys = {"w"};
+        input.gamepad.connected = true;
+        input.gamepad.axes.leftX = .6;
+        QJsonObject payload; bool neutral = true;
+        input.source = OperatorInputState::Source::Keyboard;
+        QVERIFY(ControlProtocol::input(input, &payload, &neutral));
+        QVERIFY(!neutral);
+        QVERIFY(payload["keyboard"].toObject()["pressed_keys"].toArray().contains("w"));
+        QCOMPARE(payload["gamepad"].toObject()["axes"].toObject()["left_x"].toDouble(), 0.0);
+        input.source = OperatorInputState::Source::Gamepad;
+        QVERIFY(ControlProtocol::input(input, &payload, &neutral));
+        QVERIFY(!neutral);
+        QVERIFY(payload["keyboard"].toObject()["pressed_keys"].toArray().isEmpty());
+        QCOMPARE(payload["gamepad"].toObject()["axes"].toObject()["left_x"].toDouble(), .6);
+        input.keyboard.pressedKeys.clear();
+        input.source = OperatorInputState::Source::Keyboard;
+        QVERIFY(ControlProtocol::input(input, &payload, &neutral));
+        QVERIFY(!neutral); // Even a filtered-out stick must be released before authorization.
+        input.gamepad.axes.leftX = 0;
+        QVERIFY(ControlProtocol::input(input, &payload, &neutral));
+        QVERIFY(neutral);
+    }
     void initTestCase() {
         QVERIFY(directory.isValid());
         QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,directory.path());

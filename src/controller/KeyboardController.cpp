@@ -1,5 +1,12 @@
 #include "KeyboardController.h"
 #include <algorithm>
+#include <QApplication>
+#include <QWidget>
+#include <QLineEdit>
+#include <QTextEdit>
+#include <QPlainTextEdit>
+#include <QAbstractSpinBox>
+#include <QComboBox>
 
 KeyboardController::KeyboardController(QObject *parent)
     : QObject(parent)
@@ -13,6 +20,72 @@ KeyboardController::KeyboardController(QObject *parent)
 KeyboardController::~KeyboardController()
 {
     m_sendTimer->stop();
+}
+
+void KeyboardController::setCaptureWidget(QWidget *window)
+{
+    if (m_captureWindow) qApp->removeEventFilter(this);
+    disconnect(m_focusConnection);
+    m_captureWindow = window;
+    if (!window) return;
+    qApp->installEventFilter(this);
+    m_focusConnection = connect(qApp, &QApplication::focusChanged, this, [this](QWidget *, QWidget *next) {
+        if (m_captureWindow) updateCaptureState(next);
+    });
+}
+
+bool KeyboardController::canCapture(QWidget *widget) const
+{
+    if (!m_captureWindow || !widget || widget->window() != m_captureWindow->window()
+        || QApplication::activeModalWidget() || QApplication::activePopupWidget()) return false;
+    for (QWidget *current = widget; current; current = current->parentWidget()) {
+        if (qobject_cast<QLineEdit *>(current) || qobject_cast<QAbstractSpinBox *>(current)
+            || qobject_cast<QComboBox *>(current)) return false;
+        if (auto *edit = qobject_cast<QTextEdit *>(current); edit && !edit->isReadOnly()) return false;
+        if (auto *edit = qobject_cast<QPlainTextEdit *>(current); edit && !edit->isReadOnly()) return false;
+    }
+    return true;
+}
+
+void KeyboardController::updateCaptureState(QWidget *widget)
+{
+    const bool active = canCapture(widget);
+    if (active == m_captureActive) return;
+    m_captureActive = active;
+    if (!active) clearPressedKeys();
+    emit captureStateChanged(active);
+}
+
+bool KeyboardController::eventFilter(QObject *watched, QEvent *event)
+{
+    if (!m_captureWindow || !m_enabled) return QObject::eventFilter(watched, event);
+    auto *widget = qobject_cast<QWidget *>(watched);
+    if (event->type() == QEvent::KeyRelease) {
+        auto *key = static_cast<QKeyEvent *>(event);
+        // Release held keys even when focus has moved into an editor or dialog.
+        if (m_pressedKeys.contains(key->key()) || m_waitingForRelease.contains(key->key()))
+            handleKeyRelease(key);
+    } else if (event->type() == QEvent::KeyPress && canCapture(widget)) {
+        auto *key = static_cast<QKeyEvent *>(event);
+        // Space remains the application's independent emergency shortcut.
+        if (key->key() == Qt::Key_Space || key->isAutoRepeat()) return false;
+        if (key->modifiers() & (Qt::ControlModifier | Qt::AltModifier | Qt::MetaModifier)) {
+            // Shortcuts must not turn into motion when a modifier is released first.
+            if (m_captureActive) {
+                m_captureActive = false;
+                emit captureStateChanged(false);
+            }
+            handleKeyPress(key);
+            clearPressedKeys();
+            return false;
+        }
+        handleKeyPress(key);
+        updateCaptureState(widget);
+        const QStringList movement{"w","a","s","d","u","o","q","e","k","i","j","l","f","h","y"};
+        if (movement.contains(protocolKeyName(key->key())) && key->modifiers() == Qt::NoModifier)
+            return true;
+    }
+    return QObject::eventFilter(watched, event);
 }
 
 void KeyboardController::handleKeyPress(QKeyEvent *event)
@@ -104,6 +177,7 @@ QString KeyboardController::protocolKeyName(int key) const
     case Qt::Key_Shift: return QStringLiteral("shift");
     case Qt::Key_Control: return QStringLiteral("ctrl");
     case Qt::Key_Alt: return QStringLiteral("alt");
+    case Qt::Key_Meta: return QStringLiteral("meta");
     case Qt::Key_Tab: return QStringLiteral("tab");
     case Qt::Key_Return:
     case Qt::Key_Enter: return QStringLiteral("enter");

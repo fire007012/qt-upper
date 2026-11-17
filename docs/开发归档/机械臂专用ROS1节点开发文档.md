@@ -1,3 +1,5 @@
+> 历史归档（2026-11-17 整理）。本文保留当时的设计、接口交接或验证记录；版本、路径、命令和临时授权仅对应原记录，不作为当前操作依据。当前说明见 [文档入口](../README.md)。
+
 # 机械臂专用 ROS1 节点开发文档
 
 ## 1. 目标
@@ -40,7 +42,7 @@
 
 ### 3.1 键盘机械臂模式
 
-来源：[mainwindow.cpp](/C:/Users/Lenovo/Documents/hostcomputer/mainwindow.cpp)、[KeyboardController.cpp](/C:/Users/Lenovo/Documents/hostcomputer/src/controller/KeyboardController.cpp)
+来源：`C:/Users/Lenovo/Documents/hostcomputer/mainwindow.cpp`（原 Windows 路径）、`C:/Users/Lenovo/Documents/hostcomputer/src/controller/KeyboardController.cpp`（原 Windows 路径）
 
 键盘切到机械臂模式后会发送：
 
@@ -58,7 +60,7 @@
 
 ### 3.2 手柄机械臂模式
 
-来源：[mainwindow.cpp](/C:/Users/Lenovo/Documents/hostcomputer/mainwindow.cpp)
+来源：`C:/Users/Lenovo/Documents/hostcomputer/mainwindow.cpp`（原 Windows 路径）
 
 手柄切到机械臂模式后会发送：
 
@@ -498,7 +500,7 @@ rostopic echo /arm_bridge/connection_alive
 
 更通用的整体对接文档可参考：
 
-- [下位机ROS节点对接文档.md](/C:/Users/Lenovo/Documents/hostcomputer/下位机ROS节点对接文档.md)
+- `C:/Users/Lenovo/Documents/hostcomputer/下位机ROS节点对接文档.md`（原 Windows 路径）
 - [TCP_JSON协议文档.md](../../TCP_JSON协议文档.md)
 - [手柄键盘控制说明.md](../手柄键盘控制说明.md)
 

@@ -94,7 +94,7 @@ if(HOST_BUILD_WIDGET_TESTS)
     target_include_directories(keyboard_safety_test PRIVATE ${HOST_ROOT}/src/controller)
     target_link_libraries(keyboard_safety_test PRIVATE Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME keyboard_physical_neutral COMMAND keyboard_safety_test)
-    set_tests_properties(keyboard_physical_neutral PROPERTIES TIMEOUT 10)
+    set_tests_properties(keyboard_physical_neutral PROPERTIES TIMEOUT 10 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
 
 add_executable(runtime_journal_test runtime_journal_test.cpp

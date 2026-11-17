@@ -168,6 +168,25 @@ endif()
 
 qt_finalize_executable(hostcomputer)
 
+option(HOST_BUILD_GUI_TESTS "Build full-window input and small-screen regressions" OFF)
+if(HOST_BUILD_GUI_TESTS)
+    find_package(Qt6 REQUIRED COMPONENTS Test)
+    enable_testing()
+    qt_add_executable(mainwindow_ui_test
+        tests/gui/mainwindow_ui_test.cpp mainwindow.cpp mainwindow.h mainwindow.ui
+        resources/resources.qrc)
+    target_include_directories(mainwindow_ui_test PRIVATE "${CMAKE_SOURCE_DIR}")
+    target_link_libraries(mainwindow_ui_test PRIVATE controller_layer Qt6::Test Qt6::Quick3D)
+    qt_add_resources(mainwindow_ui_test "test_robot_view"
+        PREFIX "/" FILES resources/qml/RobotView.qml)
+    add_test(NAME mainwindow_input_and_layout COMMAND mainwindow_ui_test)
+    set_tests_properties(mainwindow_input_and_layout PROPERTIES TIMEOUT 40
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+    add_test(NAME mainwindow_high_dpi_layout COMMAND mainwindow_ui_test smallScreenKeepsControlsAccessible)
+    set_tests_properties(mainwindow_high_dpi_layout PROPERTIES TIMEOUT 40
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_SCALE_FACTOR=1.5")
+endif()
+
 # Deployment is opt-in: ordinary builds do not copy developer runtimes.
 option(HOST_DEPLOY_RUNTIME "Install a Qt/QML runtime bundle" OFF)
 if(HOST_DEPLOY_RUNTIME)

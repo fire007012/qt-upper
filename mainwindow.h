@@ -84,6 +84,7 @@ private:
     void setupDisplayLayout();
     void setupKeyboardController();
     void setupHandleKey();
+    void setupAdaptiveLayout();
     void setupTimers();
     void cleanupResources();
     void updateConnectionDisplay();
@@ -181,6 +182,7 @@ private:
     ControlMode m_controlMode = ControlMode::Vehicle;
     QStringList m_keyboardPressedKeys;
     ControllerState m_latestGamepadState = {};
+    Communication::OperatorInputState::Source m_inputSource = Communication::OperatorInputState::Source::Keyboard;
     bool m_gamepadConnected = false;
     bool m_gamepadStickEmergencyHeld = false;
 

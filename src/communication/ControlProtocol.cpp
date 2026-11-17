@@ -41,6 +41,12 @@ bool ControlProtocol::input(const OperatorInputState &state, QJsonObject *payloa
     const QStringList allowedKeys{"w","a","s","d","u","o","q","e","k","i","j","l","f","h","y"};
     for (const auto &key : state.keyboard.pressedKeys) if (allowedKeys.contains(key)) keys.append(key);
     for (const auto &key : {"start", "back", "l3", "r3", "dpad_left", "dpad_right"}) buttons.remove(key);
+    if (state.source == OperatorInputState::Source::Gamepad) keys = {};
+    if (state.source == OperatorInputState::Source::Keyboard) {
+        gamepad["connected"] = false;
+        for (auto it = axes.begin(); it != axes.end(); ++it) it.value() = 0;
+        for (auto it = buttons.begin(); it != buttons.end(); ++it) it.value() = false;
+    }
     gamepad["axes"] = axes; gamepad["buttons"] = buttons;
     *payload = {{"keyboard", QJsonObject{{"pressed_keys", keys}}}, {"gamepad", gamepad}};
     return state.ttlMs >= 1 && state.ttlMs <= 300;

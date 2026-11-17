@@ -102,7 +102,7 @@ python3 -B tests/communication/control_reference_integration.py \
 
 这些契约只验证模拟输出。物理断网、真实ROS2/设备、跨机器校时及完整视频隔离必须另行验收。UI进程8秒存活也仅证明创建及事件循环，不证明Quick3D、手柄或视频。
 
-当前同级目录布局的联动步骤见 [上下位机联动排查与启动](../../docs/上下位机联动排查与启动.md)。只读契约的参考路径应显式使用 `/home/fire/ros2_ws_car/src/...`，不要求将下位机复制进上位机仓库。ROS2 临时接口覆盖层现在同时生成 `SetProfile`、`GroupOperation` 和 `ExecuteArmGoal`，支持已协商的分组控制；缺失分组服务不能当作 lifecycle 服务已通过。视频专项新增 `video_widget_lifecycle`，直接验证生产播放器销毁及显式停止后销毁，覆盖子解码器析构发出停止信号的情况。
+当前同级目录布局的联动步骤见 [当前启动说明](../../docs/上下位机启动与控制说明.md)。只读契约的参考路径应显式使用 `/home/fire/ros2_ws_car/src/...`，不要求将下位机复制进上位机仓库。ROS2 临时接口覆盖层现在同时生成 `SetProfile`、`GroupOperation` 和 `ExecuteArmGoal`，支持已协商的分组控制；缺失分组服务不能当作 lifecycle 服务已通过。视频专项新增 `video_widget_lifecycle`，直接验证生产播放器销毁及显式停止后销毁，覆盖子解码器析构发出停止信号的情况。
 
 本地发布证据：`python3 -B scripts/check_host_release.py --binary /tmp/hostcomputer-qt6-build/hostcomputer --output /tmp/hostcomputer-release-check.json`。脚本检查构建标识/Qt6、本机动态依赖和FFmpeg并记录二进制SHA256，不将本机环境检查等同干净机器/Windows发布验收。
 
@@ -115,7 +115,7 @@ Linux实际ROS2 DDS mock、仅接口类型的临时覆盖层、真实H264/RTSP�
 
 ## 三组运动预设（文档51）
 
-`motion_presets_protocol` 直接编译生产会话层，以独立 JSON peer 覆盖七种组合、增删预设、部分失败、过期、选择代际隔离和未知结果恢复，不需要 ROS 或本机端口。`control_v2_transport` 另验证连接能力发现及全局急停；`management_widget_flow` 另验证预设多选、空选择与能力门槛。使用及边界见 [Qt三组运动预设使用与验收](../../docs/Qt三组运动预设使用与验收.md)。
+`motion_presets_protocol` 直接编译生产会话层，以独立 JSON peer 覆盖七种组合、增删预设、部分失败、过期、选择代际隔离和未知结果恢复，不需要 ROS 或本机端口。`control_v2_transport` 另验证连接能力发现及全局急停；`management_widget_flow` 另验证预设多选、空选择与能力门槛。使用及边界见 [当前分组控制说明](../../docs/Qt控制v2与诊断使用.md)。
 
 
 文档51复核修复已增加：启动期间普通停止取消后续步骤、在途操作终态后的状态屏障、管理启动的目标/端点/新连接绑定、延迟和缺失能力声明、未知结果的显式停止对账和持久确认、停止诊断缺失/不一致/过期、界面连接阶段提示及不支持的检测命令原因。按用户要求保留手柄热插拔授权行为，并用独立输入回归固定该行为。
@@ -135,7 +135,7 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/hostcomputer-communication-qt5-f
 
 `control_v2_session` 增加可选能力门槛、原始服务端速度声明、严格档位校验、中立/授权换档流程、invalidated 成功后的实际读回、未知换档原 ID 恢复、全局禁止失败保持锁存、显式 clear/reset 分离、旧状态及重连不能解除本地急停、服务端 refresh_ms 调度。`motion_presets_protocol` 在 init/enable/resume 前逐步注入 EPOCH 拒绝，核对同步后仅重建明确未执行的请求，并验证 enable/resume 未知结果不重复执行。
 
-`control_v2_transport` 在 init/enable 操作保持 running 期间验证独立急停、心跳和 operation_query；`management_widget_flow` 验证能力门槛、实际档位、当前禁止标志优先于历史 RPC、物理条件 unknown/expired/stale 和过期反馈展示。测试服务不接触 ROS/CAN，不构成机械停止验收。操作和部署见 [Qt实车联调控制v2](../../docs/Qt实车联调控制v2使用与验收.md)。
+`control_v2_transport` 在 init/enable 操作保持 running 期间验证独立急停、心跳和 operation_query；`management_widget_flow` 验证能力门槛、实际档位、当前禁止标志优先于历史 RPC、物理条件 unknown/expired/stale 和过期反馈展示。测试服务不接触 ROS/CAN，不构成机械停止验收。操作和部署见 [当前控制与急停说明](../../docs/Qt控制v2与诊断使用.md)。
 
 ## 完整安装栈联动（2026-11-14）
 
@@ -151,3 +151,19 @@ python3 -B tests/communication/installed_reference_integration.py \
 ```
 
 输出目录必须是新目录。该测试与其他占用桥接调试端口 18080 的整车/视频用例顺序执行；测试允许回环 DDS/TCP。新增 `global_stop_reset_ready` 的回归核对普通清理期间不提交解除/复位，未修改未知结果和物理停止的验收边界。
+
+
+## 键盘捕获、输入来源与完整窗口回归
+
+`keyboard_physical_neutral` 使用离屏 QWidget 验证子控件上的运动键、编辑框不驱动运动、焦点切换后仍等待真实释放，以及其他窗口/组合快捷键不会变成运动键。`control_v2_session` 验证键盘/手柄来源过滤不伪造物理中立，既有急停和两类授权门槛继续保留。
+
+完整窗口布局回归单独按项目 Qt6 环境构建，不需要 ROS 或车辆：
+
+```bash
+/home/fire/Qt/Tools/CMake/bin/cmake -S . -B /tmp/hostcomputer-gui-tests \
+  -DCMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 -DHOST_BUILD_GUI_TESTS=ON
+/home/fire/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-gui-tests -j 4
+/home/fire/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-gui-tests --output-on-failure
+```
+
+两组完整窗口测试覆盖输入切换、按键反馈、900/1280/1366 像素宽度、侧栏/管理 dock 滚动访问及 150% 缩放。使用隔离的设置和日志目录，不连接服务、不授权或启动运动。软件离屏后端不验证 Quick3D 实际渲染或实机输出。

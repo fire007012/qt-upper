@@ -45,10 +45,13 @@ struct GamepadInputState {
 };
 
 struct OperatorInputState {
+    enum class Source { Combined, Keyboard, Gamepad };
     QString mode = QStringLiteral("vehicle");
     int ttlMs = 300;
     KeyboardInputState keyboard;
     GamepadInputState gamepad;
+    // Local routing only. Physical neutral checks still inspect both devices.
+    Source source = Source::Combined;
 };
 
 class HostProtocol

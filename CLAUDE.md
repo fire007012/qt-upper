@@ -91,7 +91,7 @@ ninja
 - Qt 6.8.3 (MinGW 64-bit), C++20, CMake 3.16+
 - Qt模块：Core, Widgets, Network, Quick, QuickWidgets
 - 运行时工具：FFmpeg 可执行文件用于 RTSP 低延迟播放和下位机推流
-- 开发机 FFmpeg 安装说明见 `docs/开发归档/FFmpeg开发环境安装指南.md`
+- 当前 FFmpeg 依赖和发布说明见 `docs/ROS2视频联调说明.md` 与 `docs/上位机发布与验收.md`
 - Windows XInput（手柄支持）
 - QML用于3D机器人姿态渲染（`resources/qml/RobotView.qml`）
 

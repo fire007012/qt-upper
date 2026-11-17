@@ -6,6 +6,9 @@
 #include <QTimer>
 #include <QKeyEvent>
 #include <QStringList>
+#include <QPointer>
+
+class QWidget;
 
 /**
  * @brief 键盘输入驱动 - 采集协议层稳定按键名
@@ -28,11 +31,16 @@ public:
     void setEnabled(bool enabled);
     bool isEnabled() const;
     QStringList currentKeys() const { return pressedKeyNames(); }
+    void setCaptureWidget(QWidget *window);
 
 signals:
     void operatorInputChanged(const QStringList &pressedKeys);
     void emergencyStopRequested();
     void enabledChanged(bool enabled);
+    void captureStateChanged(bool active);
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void publishOperatorInput();
@@ -40,10 +48,15 @@ private slots:
 private:
     QStringList pressedKeyNames() const;
     QString protocolKeyName(int key) const;
+    bool canCapture(QWidget *widget) const;
+    void updateCaptureState(QWidget *widget);
 
     QSet<int> m_pressedKeys;
     QSet<int> m_waitingForRelease;
     QTimer *m_sendTimer;
+    QPointer<QWidget> m_captureWindow;
+    bool m_captureActive = true;
+    QMetaObject::Connection m_focusConnection;
 
     bool m_enabled;
     static const int SEND_INTERVAL_MS = 33;  // approximately 30 Hz

@@ -59,5 +59,5 @@ private:
     QSpinBox *m_port;
     QComboBox *m_profiles, *m_motionPreset;
     QPushButton *m_start, *m_stop, *m_preflight;
-    QLabel *m_connection, *m_profileName;
+    QLabel *m_connection, *m_profileName, *m_environmentHint;
 };

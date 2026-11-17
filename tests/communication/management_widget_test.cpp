@@ -121,6 +121,56 @@ private slots:
         diagnostics["operations_authorized"]=true;widget.setControlDiagnostics(diagnostics);
         QVERIFY(widget.findChild<QPushButton *>("globalReset")->isEnabled());QCOMPARE(commands.size(),1);
     }
+    void unknownEmergencyIsNotReportedAsLatched() {
+        RuntimeManagementWidget widget;
+        widget.setControlDiagnostics({{"negotiated",true},{"motion_presets_supported",true},{"emergency_active",true}});
+        QVERIFY(widget.findChild<QLabel *>("presetState")->text().contains("急停状态未知"));
+        QVERIFY(widget.findChild<QPushButton *>("emergencyHelp")->isHidden());
+        QVERIFY(!widget.findChild<QPushButton *>("recoveryClearEmergency")->isEnabled());
+        widget.setControlDiagnostics({{"ready",true},{"emergency_active",true},{"server",QJsonObject{
+            {"emergency_active",true},{"runtime_fresh",true},{"runtime_global_inhibit",true},
+            {"global_stop",QJsonObject{{"state","result_unknown"},{"code","SERVICE_UNAVAILABLE"}}}}}});
+        QVERIFY(widget.findChild<QLabel *>("emergencyRecoveryHint")->text().contains("SERVICE_UNAVAILABLE"));
+    }
+    void missingHardwareProfileExplainsWhyMotorsCannotRun() {
+        V2ManagerStub manager; QVERIFY(manager.listen()); RuntimeManagementWidget widget; widget.show();
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *hint=widget.findChild<QLabel *>("hardwareDeploymentHint");
+        QTRY_VERIFY(hint->isVisible());
+        QVERIFY(hint->text().contains("未提供实机档案"));
+        QCOMPARE(widget.findChild<QComboBox *>("managementProfiles")->count(),1);
+        QCOMPARE(manager.starts,0);
+        manager.profileList.append(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
+        widget.findChild<RuntimeService *>()->refreshProfiles();
+        QTRY_COMPARE(widget.findChild<QComboBox *>("managementProfiles")->count(),2);
+        QTRY_VERIFY(hint->isHidden());
+    }
+    void selectedEnvironmentDoesNotRelabelRunningMock() {
+        V2ManagerStub manager; manager.software="ready"; QVERIFY(manager.listen());
+        manager.profileList.append(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
+        QSettings settings("HostComputer","Management");
+        const auto scope=QString("127.0.0.1:%1").arg(manager.port());
+        settings.setValue(scope + "/profile_id","hardware");
+        RuntimeManagementWidget widget;
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *profiles=widget.findChild<QComboBox *>("managementProfiles");
+        QTRY_COMPARE(profiles->count(),2);
+        QCOMPARE(profiles->currentData().toJsonObject()["profile_id"].toString(),QString("hardware"));
+        QTRY_VERIFY(widget.findChild<QLabel *>("managementEnvironment")->text().contains("当前：mock"));
+        QTRY_VERIFY(widget.findChild<QLabel *>("hardwareDeploymentHint")->text().contains("仍运行在模拟"));
+        QVERIFY(!profiles->isEnabled());
+        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true}});
+        QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
+        QCOMPARE(manager.starts,0);
+    }
     void unfinishedPreviousRunHasAnAccurateRecoveryPrompt() {
         V2ManagerStub manager; manager.recoveryRequired=true;manager.software="failed";QVERIFY(manager.listen());
         RuntimeManagementWidget widget;
@@ -133,7 +183,13 @@ private slots:
         QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
         QTRY_VERIFY(widget.findChild<QPushButton *>("managementStop")->isEnabled());
     }
+    void explicitDeploymentConfigPrefillsWithoutConnecting_data() {
+        QTest::addColumn<bool>("relativeToken");
+        QTest::newRow("absolute-token") << false;
+        QTest::newRow("relative-token") << true;
+    }
     void explicitDeploymentConfigPrefillsWithoutConnecting() {
+        QFETCH(bool, relativeToken);
         QTemporaryDir folder; QVERIFY(folder.isValid());
         const auto oldConfig=qgetenv("HOSTCOMPUTER_MANAGEMENT_CONFIG");
         const bool existed=qEnvironmentVariableIsSet("HOSTCOMPUTER_MANAGEMENT_CONFIG");
@@ -143,7 +199,8 @@ private slots:
         tokenFile.write(token.toUtf8()); tokenFile.close();
         QFile config(folder.filePath("manager.json")); QVERIFY(config.open(QIODevice::WriteOnly));
         config.write(QJsonDocument(QJsonObject{{"bind","0.0.0.0"},{"port",19091},
-            {"token_file",tokenFile.fileName()},{"control_endpoint",QJsonObject{{"host","127.0.0.1"}}}}).toJson()); config.close();
+            {"token_file",relativeToken ? QString("token") : tokenFile.fileName()},
+            {"control_endpoint",QJsonObject{{"host","192.0.2.99"}}}}).toJson()); config.close();
         qputenv("HOSTCOMPUTER_MANAGEMENT_CONFIG",config.fileName().toUtf8());
         RuntimeManagementWidget widget;
         QCOMPARE(widget.findChild<QLineEdit *>("managementHost")->text(),QString("127.0.0.1"));
@@ -153,6 +210,17 @@ private slots:
         const auto services=widget.findChildren<RuntimeService *>();
         QCOMPARE(services.size(),1); QVERIFY(!services.first()->canQuery());
         for(auto *log:widget.findChildren<QPlainTextEdit *>()) QVERIFY(!log->toPlainText().contains(token));
+    }
+    void vehicleEntryOverridesLocalAddressAndTokenWithoutConnecting() {
+        const auto previous=qgetenv("HOSTCOMPUTER_MANAGEMENT_HOST");
+        const bool existed=qEnvironmentVariableIsSet("HOSTCOMPUTER_MANAGEMENT_HOST");
+        const auto restore=qScopeGuard([&]{if(existed)qputenv("HOSTCOMPUTER_MANAGEMENT_HOST",previous);else qunsetenv("HOSTCOMPUTER_MANAGEMENT_HOST");});
+        qputenv("HOSTCOMPUTER_MANAGEMENT_HOST","192.0.2.24");
+        RuntimeManagementWidget widget;
+        QCOMPARE(widget.findChild<QLineEdit *>("managementHost")->text(),QString("192.0.2.24"));
+        QCOMPARE(widget.findChild<QSpinBox *>("managementPort")->value(),9091);
+        QVERIFY(widget.findChild<QLineEdit *>("managementToken")->text().isEmpty());
+        QVERIFY(!widget.findChild<RuntimeService *>()->canQuery());
     }
     void fieldControlsStayAvailableWithoutDiagnosticClutter() {
         RuntimeManagementWidget widget;

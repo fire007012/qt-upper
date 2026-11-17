@@ -11,6 +11,7 @@
 ControlPanelWidget::ControlPanelWidget(QWidget *parent)
     : QWidget(parent)
 {
+    setFocusPolicy(Qt::StrongFocus);
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setContentsMargins(8, 8, 8, 8);
     mainLayout->setSpacing(8);
@@ -19,38 +20,86 @@ ControlPanelWidget::ControlPanelWidget(QWidget *parent)
     statusGrid->setHorizontalSpacing(8);
     statusGrid->setVerticalSpacing(4);
 
-    auto *modeLabel = new QLabel("模式", this);
+    auto *modeLabel = new QLabel("控制对象", this);
     m_modeValue = new QLabel("车体运动", this);
-    auto *gamepadLabel = new QLabel("手柄", this);
+    m_modeValue->setObjectName("controlTargetValue");
+    m_inputSourceValue = new QLabel(QStringLiteral("键盘"), this);
+    m_inputSourceValue->setObjectName("panelInputSourceValue");
+    m_gamepadLabel = new QLabel("手柄连接", this);
     m_gamepadValue = new QLabel("未连接", this);
+    m_gamepadValue->setObjectName("gamepadConnectionValue");
+    m_keyboardCaptureLabel = new QLabel(QStringLiteral("键盘接收"), this);
+    m_keyboardCaptureValue = new QLabel(this);
+    m_keyboardCaptureValue->setObjectName("keyboardCaptureValue");
+    m_keyboardCaptureValue->setWordWrap(true);
+    setKeyboardCaptureActive(true);
 
     statusGrid->addWidget(modeLabel, 0, 0);
     statusGrid->addWidget(m_modeValue, 0, 1);
-    statusGrid->addWidget(gamepadLabel, 1, 0);
-    statusGrid->addWidget(m_gamepadValue, 1, 1);
+    statusGrid->addWidget(new QLabel(QStringLiteral("输入方式"), this), 1, 0);
+    statusGrid->addWidget(m_inputSourceValue, 1, 1);
+    statusGrid->addWidget(m_keyboardCaptureLabel, 2, 0);
+    statusGrid->addWidget(m_keyboardCaptureValue, 2, 1);
+    statusGrid->addWidget(m_gamepadLabel, 3, 0);
+    statusGrid->addWidget(m_gamepadValue, 3, 1);
 
     auto *buttonLayout = new QHBoxLayout();
     m_gamepadButton = new QPushButton("连接手柄", this);
+    m_gamepadButton->setObjectName("panelGamepadConnect");
     m_emergencyButton = new QPushButton("急停", this);
     m_emergencyButton->setObjectName("controlPanelEmergencyButton");
     buttonLayout->addWidget(m_gamepadButton);
     buttonLayout->addWidget(m_emergencyButton);
 
     m_gamepadDisplay = new GamepadDisplayWidget(this);
+    m_keyboardHelp = new QLabel(QStringLiteral("键盘控制\n底盘：W/S 前进后退，A/D 转向\n空格：全车急停\n机械臂与摆臂按当前控制域映射。\n先启动运动组，释放按键并归中，再允许遥控。"), this);
+    m_keyboardHelp->setObjectName("keyboardControlHelp");
+    m_keyboardHelp->setWordWrap(true);
+    m_keyboardKeys = new QLabel(QStringLiteral("当前按键：无"), this);
+    m_keyboardKeys->setObjectName("keyboardPressedKeys");
+    m_keyboardKeys->setWordWrap(true);
 
     mainLayout->addLayout(statusGrid);
     mainLayout->addLayout(buttonLayout);
+    mainLayout->addWidget(m_keyboardHelp);
+    mainLayout->addWidget(m_keyboardKeys);
     mainLayout->addWidget(m_gamepadDisplay, 1);
+    setKeyboardSource(true);
 
     connect(m_gamepadButton, &QPushButton::clicked, this, &ControlPanelWidget::gamepadConnectRequested);
     connect(m_emergencyButton, &QPushButton::clicked, this, &ControlPanelWidget::emergencyStopRequested);
 
     setStyleSheet(
         "ControlPanelWidget { background: #ffffff; border: 1px solid #dbe3ef; border-radius: 6px; }"
+        "ControlPanelWidget:focus { border: 2px solid #2563eb; }"
         "ControlPanelWidget QLabel { color: #111827; font-size: 13px; }"
         "ControlPanelWidget QPushButton { min-height: 28px; padding: 4px 10px; }"
         "QPushButton#controlPanelEmergencyButton { background: #b91c1c; color: white; font-weight: 700; }"
         "QPushButton#controlPanelEmergencyButton:hover { background: #991b1b; }");
+}
+
+void ControlPanelWidget::setKeyboardSource(bool keyboard)
+{
+    m_inputSourceValue->setText(keyboard ? QStringLiteral("键盘") : QStringLiteral("手柄"));
+    m_gamepadLabel->setVisible(!keyboard);
+    m_gamepadValue->setVisible(!keyboard);
+    m_gamepadButton->setVisible(!keyboard);
+    m_keyboardCaptureLabel->setVisible(keyboard);
+    m_keyboardCaptureValue->setVisible(keyboard);
+    m_keyboardHelp->setVisible(keyboard);
+    m_keyboardKeys->setVisible(keyboard);
+    m_gamepadDisplay->setVisible(!keyboard);
+}
+
+void ControlPanelWidget::setKeyboardCaptureActive(bool active)
+{
+    m_keyboardCaptureValue->setText(active ? QStringLiteral("已就绪（运动仍需授权）")
+                                         : QStringLiteral("已暂停，请返回键盘控制"));
+}
+
+void ControlPanelWidget::setKeyboardKeys(const QStringList &keys)
+{
+    m_keyboardKeys->setText(QStringLiteral("当前按键：%1").arg(keys.isEmpty() ? QStringLiteral("无") : keys.join(", ")));
 }
 
 void ControlPanelWidget::setModeText(const QString &modeText)

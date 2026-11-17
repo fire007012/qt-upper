@@ -40,6 +40,8 @@
 #include <QListWidgetItem>
 #include <QSizePolicy>
 #include <QSplitter>
+#include <QScrollArea>
+#include <QScreen>
 #ifdef Q_OS_WIN
 #include <windows.h>
 #include <shellapi.h>
@@ -127,8 +129,7 @@ MainWindow::MainWindow(QWidget *parent)
 
     // 设置窗口属性
     setWindowTitle("上位机v2");
-    resize(1920, 1080);
-    setMinimumSize(1600, 900);
+    setMinimumSize(480, 360);
     m_statusErrorLabel = ui->label_status_error_count;
 
     // 初始化组件
@@ -150,18 +151,61 @@ MainWindow::MainWindow(QWidget *parent)
     setupStatusBar();
 
     auto *runtimeDock = new QDockWidget(QStringLiteral("一键启动"), this);
+    runtimeDock->setObjectName("runtimeDock");
     auto *runtimeWidget = new RuntimeManagementWidget(runtimeDock);
-    runtimeDock->setWidget(runtimeWidget);
-    runtimeDock->setMinimumWidth(360);
+    auto *runtimeScroll = new QScrollArea(runtimeDock);
+    runtimeScroll->setWidgetResizable(true);
+    runtimeScroll->setWidget(runtimeWidget);
+    runtimeDock->setWidget(runtimeScroll);
+    runtimeDock->setMinimumWidth(320);
     addDockWidget(Qt::RightDockWidgetArea, runtimeDock);
     runtimeDock->hide();
     auto *runtimeToolbar = addToolBar(QStringLiteral("系统管理"));
     auto *runtimeAction = runtimeDock->toggleViewAction();
     runtimeAction->setText(QStringLiteral("一键启动"));
     runtimeToolbar->addAction(runtimeAction);
+    runtimeToolbar->addSeparator();
+    runtimeToolbar->addWidget(new QLabel(QStringLiteral("输入方式："), this));
+    auto *inputSource = new QComboBox(this);
+    inputSource->setObjectName("inputSourceSelector");
+    inputSource->addItem(QStringLiteral("键盘"));
+    inputSource->addItem(QStringLiteral("手柄"));
+    runtimeToolbar->addWidget(inputSource);
+    auto *keyboardFocus = new QPushButton(QStringLiteral("返回键盘控制"), this);
+    keyboardFocus->setObjectName("focusKeyboardButton");
+    keyboardFocus->setToolTip(QStringLiteral("结束参数编辑并回到按键接收区域；右侧显示键盘状态和当前按键。不会启动电机或授予遥控权限。"));
+    runtimeToolbar->addWidget(keyboardFocus);
+    connect(keyboardFocus, &QPushButton::clicked, this, [this] {
+        activateWindow();
+        if (auto *sidebar = findChild<QScrollArea *>("sidebarScrollArea"))
+            sidebar->ensureWidgetVisible(m_controlPanel);
+        if (auto *workspace = findChild<QScrollArea *>("workspaceScrollArea"))
+            workspace->ensureWidgetVisible(m_controlPanel);
+        m_controlPanel->setFocus(Qt::OtherFocusReason);
+        QTimer::singleShot(0, m_controlPanel, [panel = m_controlPanel] {
+            panel->setFocus(Qt::OtherFocusReason);
+        });
+        statusBar()->showMessage(QStringLiteral("键盘接收已就绪：按 W/A/S/D 可在右侧查看按键；电机运动仍需启动组并允许遥控。"), 6000);
+    });
+    connect(inputSource, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, keyboardFocus](int index) {
+        m_inputSource = index == 0 ? Communication::OperatorInputState::Source::Keyboard
+                                 : Communication::OperatorInputState::Source::Gamepad;
+        m_controller->setOperatorControlEnabled(false);
+        m_keyboardController->clearPressedKeys();
+        m_controlPanel->setKeyboardSource(index == 0);
+        keyboardFocus->setVisible(index == 0);
+        m_controlPanel->setFocus(Qt::OtherFocusReason);
+        addCommand(QStringLiteral("[输入方式] 已切换为%1；请释放按键、手柄归中，重新允许操作/遥控。")
+                   .arg(index == 0 ? QStringLiteral("键盘") : QStringLiteral("手柄")));
+        sendOperatorInputSnapshot();
+    });
     auto *diagnosticsDock = new QDockWidget(QStringLiteral("控制与遥测诊断"), this);
-    diagnosticsDock->setWidget(new DiagnosticsWidget(m_controller, diagnosticsDock));
-    diagnosticsDock->setMinimumWidth(500); addDockWidget(Qt::RightDockWidgetArea, diagnosticsDock); diagnosticsDock->hide();
+    auto *diagnosticsScroll = new QScrollArea(diagnosticsDock);
+    diagnosticsScroll->setWidgetResizable(true);
+    diagnosticsScroll->setWidget(new DiagnosticsWidget(m_controller, diagnosticsDock));
+    diagnosticsDock->setWidget(diagnosticsScroll);
+    diagnosticsDock->setMinimumWidth(320); addDockWidget(Qt::RightDockWidgetArea, diagnosticsDock); diagnosticsDock->hide();
     runtimeToolbar->addAction(diagnosticsDock->toggleViewAction());
     connect(runtimeWidget, &RuntimeManagementWidget::controlUnavailable, this, [this] {
         m_controller->setOperatorControlEnabled(false);
@@ -232,10 +276,95 @@ MainWindow::MainWindow(QWidget *parent)
     // 添加系统启动提示
     addCommand("[系统] 主窗口初始化完成");
     addCommand("[系统] 请连接TCP设备开始接收数据");
+    setupAdaptiveLayout();
+}
+
+void MainWindow::setupAdaptiveLayout()
+{
+    // Two status rows keep emergency buttons visible without a 1600 px minimum.
+    auto *old = ui->frame_status->layout();
+    while (auto *item = old->takeAt(0)) {
+        if (auto *widget = item->widget()) widget->hide();
+        delete item;
+    }
+    delete old;
+    auto *status = new QGridLayout(ui->frame_status);
+    status->setContentsMargins(6, 4, 6, 4);
+    status->setSpacing(4);
+    auto group = [this, status](int row, int col, std::initializer_list<QWidget *> widgets) {
+        auto *box = new QWidget(ui->frame_status);
+        auto *layout = new QHBoxLayout(box);
+        layout->setContentsMargins(0, 0, 0, 0);
+        layout->setSpacing(4);
+        for (auto *widget : widgets) { layout->addWidget(widget); widget->show(); }
+        layout->addStretch();
+        status->addWidget(box, row, col);
+    };
+    ui->label_cpu_value->setMinimumWidth(100);
+    ui->label_cpu_value->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    group(0, 0, {ui->label_connection_status, ui->label_connection_value});
+    group(0, 1, {ui->label_heartbeat, ui->label_heartbeat_value});
+    group(0, 2, {ui->label_fps, ui->label_fps_value});
+    group(0, 3, {ui->label_cpu, ui->label_cpu_value});
+    group(1, 0, {ui->label_mode, ui->label_mode_value});
+    group(1, 1, {ui->label_status_error_count});
+    group(1, 2, {ui->label_co2, ui->label_co2_value});
+    group(1, 3, {ui->btn_clear_emergency, ui->btn_emergency_stop});
+    ui->frame_status->setMaximumHeight(QWIDGETSIZE_MAX);
+    ui->frame_status->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    ui->group_cameras->setMinimumSize(360, 240);
+    ui->widget_right_panel->setMinimumWidth(320);
+    ui->motorRuntimeWidget->setMinimumHeight(160);
+    ui->group_car_model->setMinimumHeight(180);
+    ui->controlPanelWidget->setMinimumHeight(0);
+    ui->controlPanelWidget->setMaximumHeight(QWIDGETSIZE_MAX);
+    ui->verticalLayout_right->removeWidget(m_controlPanel);
+    ui->verticalLayout_right->insertWidget(0, m_controlPanel);
+    ui->verticalLayout_right->removeWidget(ui->group_lifecycle_control);
+    ui->verticalLayout_right->insertWidget(1, ui->group_lifecycle_control);
+    for (int i = 0; i < ui->verticalLayout_right->count(); ++i)
+        ui->verticalLayout_right->setStretch(i, i == 3 ? 1 : 0);
+    auto *sidebar = new QScrollArea(ui->centralwidget);
+    sidebar->setObjectName("sidebarScrollArea");
+    sidebar->setMinimumWidth(340);
+    sidebar->setWidgetResizable(true);
+    sidebar->setFrameShape(QFrame::NoFrame);
+    ui->splitter_main->replaceWidget(1, sidebar);
+    sidebar->setWidget(ui->widget_right_panel);
+    ui->splitter_main->setSizes({800, 340});
+    auto *workspace = takeCentralWidget();
+    auto *scroll = new QScrollArea(this);
+    scroll->setObjectName("workspaceScrollArea");
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    workspace->setMinimumSize(960, 460);
+    scroll->setWidget(workspace);
+    setCentralWidget(scroll);
+    for (auto *label : {m_connectionPhaseLabel, m_controlPermissionLabel}) {
+        label->setMinimumWidth(0);
+        label->setMaximumWidth(320);
+        label->setWordWrap(true);
+        label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    }
+    if (auto *screen = this->screen()) {
+        const auto available = screen->availableGeometry();
+        const QSize target(qMin(1440, available.width() - 24), qMin(900, available.height() - 64));
+        resize(target.expandedTo(minimumSize()));
+        move(available.center() - QPoint(width() / 2, height() / 2));
+    }
 }
 
 MainWindow::~MainWindow()
 {
+    // QApplication focus notifications can arrive while QWidget tears down children.
+    // Stop capture before QMainWindow's status bar and controller are destroyed.
+    disconnect(qApp, nullptr, this, nullptr);
+    if (m_keyboardController) {
+        m_keyboardController->setCaptureWidget(nullptr);
+        disconnect(m_keyboardController, nullptr, this, nullptr);
+        m_keyboardController->setEnabled(false);
+    }
     if (m_statusTimer) {
         m_statusTimer->stop();
     }
@@ -469,7 +598,11 @@ void MainWindow::setupBottomActionPanel()
     actionLayout->addWidget(armGroup, 3);
     actionLayout->addWidget(monitorGroup, 0);
 
-    bottomSplit->addWidget(actionPanel);
+    auto *actionScroll = new QScrollArea(bottomContainer);
+    actionScroll->setObjectName("actionScrollArea");
+    actionScroll->setWidgetResizable(true);
+    actionScroll->setWidget(actionPanel);
+    bottomSplit->addWidget(actionScroll);
     bottomSplit->setStretchFactor(0, 4);
     bottomSplit->setStretchFactor(1, 2);
     bottomSplit->setSizes({1040, 360});
@@ -633,6 +766,13 @@ void MainWindow::updateArmNamedTargets(const QJsonObject &message)
 void MainWindow::setupKeyboardController()
 {
     m_keyboardController = new KeyboardController(this);
+    m_keyboardController->setCaptureWidget(this);
+    connect(m_keyboardController, &KeyboardController::captureStateChanged, this, [this](bool active) {
+        if (m_controlPanel) m_controlPanel->setKeyboardCaptureActive(active);
+        if (!active && m_controller) m_controller->setOperatorControlEnabled(false);
+        if (!active && m_inputSource == Communication::OperatorInputState::Source::Keyboard)
+            statusBar()->showMessage(QStringLiteral("键盘输入暂停：正在编辑或切换窗口；完成后点击“返回键盘控制”，归中并重新授权。"), 5000);
+    });
     connect(qApp, &QGuiApplication::applicationStateChanged, this, [this](Qt::ApplicationState state) {
         if (state == Qt::ApplicationActive) return;
         if (m_controller) m_controller->setOperatorControlEnabled(false);
@@ -644,6 +784,7 @@ void MainWindow::setupKeyboardController()
         static qint64 lastLogTime = 0;
         const bool changed = (pressedKeys != m_keyboardPressedKeys);
         m_keyboardPressedKeys = pressedKeys;
+        if (m_controlPanel) m_controlPanel->setKeyboardKeys(pressedKeys);
 
         if (changed) {
             qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -707,9 +848,11 @@ void MainWindow::setupStatusBar()
 {
     statusBar()->showMessage("系统就绪");
     m_connectionPhaseLabel = new QLabel(QStringLiteral("控制链路：未连接"), this);
-    statusBar()->addPermanentWidget(m_connectionPhaseLabel);
+    m_connectionPhaseLabel->setObjectName("connectionPhaseLabel");
+    statusBar()->addPermanentWidget(m_connectionPhaseLabel, 1);
     m_controlPermissionLabel = new QLabel(QStringLiteral("运行许可：未知；桥接急停：未知"), this);
-    statusBar()->addPermanentWidget(m_controlPermissionLabel);
+    m_controlPermissionLabel->setObjectName("controlPermissionLabel");
+    statusBar()->addPermanentWidget(m_controlPermissionLabel, 1);
     m_operationsControlButton = new QPushButton(QStringLiteral("允许操作"), this);
     m_operationsControlButton->setToolTip(QStringLiteral("中立输入后显式授权初始化、使能、恢复和模式切换；不会授予运动权限。"));
     statusBar()->addPermanentWidget(m_operationsControlButton);
@@ -932,9 +1075,6 @@ void MainWindow::keyPressEvent(QKeyEvent *event)
         return;
     }
 
-    if (m_keyboardController && m_keyboardController->isEnabled()) {
-        m_keyboardController->handleKeyPress(event);
-    }
     QMainWindow::keyPressEvent(event);
 }
 
@@ -945,9 +1085,6 @@ void MainWindow::keyReleaseEvent(QKeyEvent *event)
         return;
     }
 
-    if (m_keyboardController && m_keyboardController->isEnabled()) {
-        m_keyboardController->handleKeyRelease(event);
-    }
     QMainWindow::keyReleaseEvent(event);
 }
 
@@ -1230,6 +1367,7 @@ void MainWindow::sendOperatorInputSnapshot()
     Communication::OperatorInputState inputState;
     inputState.mode = modeNameForProtocol(m_controlMode);
     inputState.ttlMs = 300;
+    inputState.source = m_inputSource;
     inputState.keyboard.pressedKeys = m_keyboardController ? m_keyboardController->currentKeys() : QStringList{};
     inputState.gamepad = makeGamepadInputState(m_latestGamepadState, m_handleKey && m_handleKey->isConnected());
 
