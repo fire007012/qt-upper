@@ -43,6 +43,9 @@ def main():
     if args.exercise_arm and args.presets != 'arm': parser.error('exercise-arm requires arm preset')
     if args.fault_unselected and args.presets != 'base': parser.error('fault-unselected requires base preset')
     selected = dict(base=['base'], flippers=['flippers'], arm=['arm'], all=['flippers','base','arm'], base_flippers=['flippers','base'])[args.presets]
+    # Fault isolation needs the unselected mock axes to exist. The production
+    # launcher prunes axes outside software presets; operator presets stay base.
+    software_selected = ['flippers','base','arm'] if args.fault_unselected else selected
     root.mkdir(parents=True, exist_ok=False)
     (root / 'profiles').mkdir()
     (root / 'profiles/mock.json').write_text(json.dumps(profiles[0]))
@@ -159,6 +162,7 @@ def main():
                 time.sleep(.1)
             env = dict(os.environ, HOST_INSTALLED_TOKEN_FILE=str(token),
                        HOST_INSTALLED_MANAGER_PORT=str(manager_port), HOST_INSTALLED_PRESETS=json.dumps(selected),
+                       HOST_INSTALLED_SOFTWARE_PRESETS=json.dumps(software_selected),
                        HOST_INSTALLED_HOLD_MS=str(args.hold_ms), HOST_INSTALLED_INITIAL_EMERGENCY=str(int(args.initial_emergency)), QTEST_FUNCTION_TIMEOUT='360000')
             if args.exercise_arm: env['HOST_INSTALLED_ARM_ROOT']=str(root)
             else: env.pop('HOST_INSTALLED_ARM_ROOT', None)
@@ -173,7 +177,8 @@ def main():
             if args.exercise_arm:
                 assert observed['arm_motion'] and observed['gripper_motion'] and observed['neutral_stop'], observed
             report['joint_max_displacement']=max_delta
-            report.update(presets=selected,hold_ms=args.hold_ms,initial_emergency=args.initial_emergency)
+            report.update(presets=selected,software_presets=software_selected,
+                          hold_ms=args.hold_ms,initial_emergency=args.initial_emergency)
             report.update(unselected_faults=args.fault_unselected)
             report.update(passed=True, **observed, resources_remaining=0)
         finally:

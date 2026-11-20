@@ -2,7 +2,7 @@
 set -euo pipefail
 host_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 host_config="${HOSTCOMPUTER_MANAGEMENT_CONFIG:-$HOME/robot24-portable/runtime/manager.json}"
-host_binary="${HOSTCOMPUTER_BINARY:-$host_root/build-linked/hostcomputer}"
+host_binary="${HOSTCOMPUTER_BINARY:-$host_root/build/hostcomputer}"
 if [[ "${1:-}" == "--vehicle" ]]; then
     if [[ -z "${2:-}" || "$2" == -* ]]; then
         echo '用法：run_linked.sh --vehicle 下位机IP；用于跨主机连接，运行环境在界面选择。' >&2
@@ -18,8 +18,12 @@ if [[ "${1:-}" == "--vehicle" ]]; then
     echo '跨主机连接入口：请核对管理端口和令牌，再选择 mock 或 hardware 档案。' >&2
     exec "$host_binary" "$@"
 fi
-if [[ ! -f "$host_config" || ! -x "$host_binary" ]]; then
-    echo '未找到联动配置或上位机构建，请查看 docs/上下位机启动与控制说明.md' >&2
+if [[ ! -f "$host_config" ]]; then
+    echo "未找到下位机管理配置：$host_config；请设置 HOSTCOMPUTER_MANAGEMENT_CONFIG。" >&2
+    exit 1
+fi
+if [[ ! -x "$host_binary" ]]; then
+    echo "未找到可执行的上位机程序：$host_binary；请设置 HOSTCOMPUTER_BINARY。" >&2
     exit 1
 fi
 echo '同机连接入口：读取本机管理配置；模拟选 mock，实机选 hardware。跨主机才使用 --vehicle 下位机IP。' >&2

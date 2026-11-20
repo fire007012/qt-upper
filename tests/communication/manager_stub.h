@@ -13,6 +13,8 @@ public:
     QList<QTcpSocket *> peers;
     bool dropStart = false, dropStop = false, fragmented = false, wrongId = false, authFailure = false;
     QString software = "stopped", taskState = "succeeded", taskError;
+    QString activeProfile = "mock", activeRevision = "rev-A";
+    QString operationMethod = "start", taskDiagnostic;
     QString operationId;
     bool requiredHealthy = true, recoveryRequired = false;
     int starts = 0, stops = 0;
@@ -39,8 +41,10 @@ public:
     quint16 port() const { return server.serverPort(); }
     QString token() const { return QString(40, 'x'); }
     QJsonObject operation() const {
-        return {{"operation_id", operationId}, {"state", taskState}, {"phase", "complete"}, {"method", "start"},
-                {"modules", QJsonObject{}}, {"error", taskError.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(QJsonObject{{"code", taskError}, {"message", "injected failure"}, {"hint", "inspect"}})}};
+        QJsonObject error{{"code", taskError}, {"message", "injected failure"}, {"hint", "inspect"}};
+        if (!taskDiagnostic.isEmpty()) error["diagnostic"] = taskDiagnostic;
+        return {{"operation_id", operationId}, {"state", taskState}, {"phase", "complete"}, {"method", operationMethod},
+                {"modules", QJsonObject{}}, {"error", taskError.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(error)}};
     }
     virtual void respond(QTcpSocket *peer, const QJsonObject &request) {
         const auto method = request["method"].toString();
@@ -52,18 +56,20 @@ public:
         else if (method == "profiles") result = profileList;
         else if (method == "preflight") result = QJsonObject{{"passed", false}, {"checks", QJsonArray{QJsonObject{{"name", "device"}, {"ok", false}, {"code", "DEVICE"}}}}};
         else if (method == "start") {
-            ++starts; operationId = "op-start"; software = "ready";
+            ++starts; operationId = "op-start"; operationMethod = "start"; software = "ready";
+            activeProfile = request["params"].toObject()["profile_id"].toString();
+            activeRevision = request["params"].toObject()["config_revision"].toString();
             if (dropStart) { peer->disconnectFromHost(); return; }
             result = operation();
         } else if (method == "stop") {
-            ++stops; operationId = "op-stop"; software = "stopped";
+            ++stops; operationId = "op-stop"; operationMethod = "stop"; software = "stopped";
             if (dropStop) { peer->disconnectFromHost(); return; }
             result = operation();
         } else if (method == "operation") {
             if (operationId.isEmpty()) error = "NOT_FOUND";
             else result = operation();
         } else if (method == "snapshot") result = QJsonObject{
-            {"software_state", software}, {"profile_id", "mock"}, {"config_revision", "rev-A"},
+            {"software_state", software}, {"profile_id", activeProfile}, {"config_revision", activeRevision},
             {"build_version", "test"}, {"operation_id", operationId.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(operationId)},
             {"recovery_required", recoveryRequired}, {"safety", QJsonValue(QJsonValue::Null)}, {"runtime", QJsonValue(QJsonValue::Null)},
             {"control_endpoint", QJsonObject{{"host", "127.0.0.1"}, {"port", 9090}, {"protocol_version", 1}}},

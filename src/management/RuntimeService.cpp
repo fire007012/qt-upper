@@ -97,6 +97,13 @@ bool RuntimeService::canStart() const
         && (state == "stopped" || state == "failed");
 }
 bool RuntimeService::canStop() const { return canQuery() && m_reconciled && !m_running; }
+bool RuntimeService::canSelectProfile() const
+{
+    const auto state = m_snapshot["software_state"].toString();
+    // Reading status must not close the environment menu once per poll.
+    return m_online && m_reconciled && !m_running && !m_configurationBlocked && !m_refreshProfiles
+        && state != "starting" && state != "stopping";
+}
 bool RuntimeService::start(const QString &profile, const QString &revision, const QJsonArray &presets)
 {
     if (!canStart() || profile.isEmpty() || revision.isEmpty()) return false;

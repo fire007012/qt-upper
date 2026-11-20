@@ -22,13 +22,28 @@
 class V2ManagerStub : public ManagerStub {
 public:
     bool recoveryRequired=false;
+    int snapshotDelayMs = 0;
+    bool keepActiveProfileOnStart = false;
     void respond(QTcpSocket *peer, const QJsonObject &request) override {
-        if (request["method"] != QJsonValue("snapshot")) { ManagerStub::respond(peer,request); return; }
+        if (request["method"] != QJsonValue("snapshot")) {
+            const auto profile = activeProfile, revision = activeRevision;
+            ManagerStub::respond(peer,request);
+            if (keepActiveProfileOnStart && request["method"] == QJsonValue("start")) { activeProfile = profile; activeRevision = revision; }
+            return;
+        }
         QJsonObject modules{{"core",QJsonObject{{"ok",true}}},{"bridge",QJsonObject{{"ok",true}}}};
-        QJsonObject snapshot{{"software_state",software},{"profile_id","mock"},{"config_revision","rev-A"},
+        QJsonObject snapshot{{"software_state",software},{"profile_id",activeProfile},{"config_revision",activeRevision},
             {"operation_id",operationId.isEmpty() ? QJsonValue(QJsonValue::Null) : QJsonValue(operationId)},
             {"recovery_required",recoveryRequired},{"modules",modules},{"control_endpoint",QJsonObject{{"host","127.0.0.1"},{"port",9090},{"protocol_version",2}}}};
-        peer->write(QJsonDocument(QJsonObject{{"version",1},{"request_id",request["request_id"]},{"ok",true},{"result",snapshot}}).toJson(QJsonDocument::Compact)+'\n');
+        const auto bytes = QJsonDocument(QJsonObject{{"version",1},{"request_id",request["request_id"]},{"ok",true},{"result",snapshot}}).toJson(QJsonDocument::Compact)+'\n';
+        QTimer::singleShot(snapshotDelayMs, peer, [peer, bytes] { peer->write(bytes); });
+    }
+};
+class RecoveryStopStub : public V2ManagerStub {
+public:
+    void respond(QTcpSocket *peer, const QJsonObject &request) override {
+        V2ManagerStub::respond(peer, request);
+        if (request["method"] == QJsonValue("stop")) software = "stopping";
     }
 };
 class ManagementWidgetTest : public QObject {
@@ -47,6 +62,11 @@ private slots:
     }
     void cleanupTestCase() {
         if(hadLogDirectory)qputenv("HOSTCOMPUTER_RUNTIME_LOG_DIR",previousLogDirectory);else qunsetenv("HOSTCOMPUTER_RUNTIME_LOG_DIR");
+    }
+    void init() {
+        QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,testFiles.path());
+        QSettings::setPath(QSettings::IniFormat,QSettings::UserScope,testFiles.path());
+        QSettings settings("HostComputer", "Management"); settings.clear(); settings.setValue("desired_mode", "mock");
     }
     void minimalPageKeepsDetailedInformationInFiles() {
         RuntimeManagementWidget widget; widget.resize(400,520); widget.show();
@@ -134,6 +154,7 @@ private slots:
     }
     void missingHardwareProfileExplainsWhyMotorsCannotRun() {
         V2ManagerStub manager; QVERIFY(manager.listen()); RuntimeManagementWidget widget; widget.show();
+        auto *mode = widget.findChild<QComboBox *>("managementMode"); mode->setCurrentIndex(mode->findData("hardware"));
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
         widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
         widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
@@ -141,12 +162,14 @@ private slots:
         auto *hint=widget.findChild<QLabel *>("hardwareDeploymentHint");
         QTRY_VERIFY(hint->isVisible());
         QVERIFY(hint->text().contains("未提供实机档案"));
-        QCOMPARE(widget.findChild<QComboBox *>("managementProfiles")->count(),1);
+        QCOMPARE(widget.findChild<QComboBox *>("managementProfiles")->count(),0);
+        QCOMPARE(mode->currentData().toString(), QString("hardware"));
+        QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
         QCOMPARE(manager.starts,0);
         manager.profileList.append(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
             {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
         widget.findChild<RuntimeService *>()->refreshProfiles();
-        QTRY_COMPARE(widget.findChild<QComboBox *>("managementProfiles")->count(),2);
+        QTRY_COMPARE(widget.findChild<QComboBox *>("managementProfiles")->count(),1);
         QTRY_VERIFY(hint->isHidden());
     }
     void selectedEnvironmentDoesNotRelabelRunningMock() {
@@ -154,22 +177,172 @@ private slots:
         manager.profileList.append(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
             {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
         QSettings settings("HostComputer","Management");
-        const auto scope=QString("127.0.0.1:%1").arg(manager.port());
-        settings.setValue(scope + "/profile_id","hardware");
+        settings.setValue("desired_mode", "hardware");
         RuntimeManagementWidget widget;
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
         widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
         widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
         widget.findChild<QPushButton *>("managementConnect")->click();
         auto *profiles=widget.findChild<QComboBox *>("managementProfiles");
-        QTRY_COMPARE(profiles->count(),2);
+        QTRY_COMPARE(profiles->count(),1);
         QCOMPARE(profiles->currentData().toJsonObject()["profile_id"].toString(),QString("hardware"));
         QTRY_VERIFY(widget.findChild<QLabel *>("managementEnvironment")->text().contains("当前：mock"));
-        QTRY_VERIFY(widget.findChild<QLabel *>("hardwareDeploymentHint")->text().contains("仍运行在模拟"));
+        QTRY_VERIFY(widget.findChild<QLabel *>("hardwareDeploymentHint")->text().contains("先点击“停止系统”"));
+        QVERIFY(widget.findChild<QLabel *>("managementEnvironment")->text().contains("准备启动：hardware"));
+        QTRY_VERIFY(widget.findChild<QComboBox *>("managementMode")->isEnabled());
         QVERIFY(!profiles->isEnabled());
         widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true}});
         QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
         QCOMPARE(manager.starts,0);
+    }
+    void chooseEnvironmentBeforeConnecting_data() {
+        QTest::addColumn<QString>("targetMode"); QTest::addColumn<bool>("reverseOrder");
+        QTest::newRow("mock-first") << QString("mock") << false;
+        QTest::newRow("mock-reordered") << QString("mock") << true;
+        QTest::newRow("hardware-first") << QString("hardware") << false;
+        QTest::newRow("hardware-reordered") << QString("hardware") << true;
+    }
+    void chooseEnvironmentBeforeConnecting() {
+        QFETCH(QString, targetMode); QFETCH(bool, reverseOrder);
+        QSettings settings("HostComputer", "Management"); settings.remove("desired_mode");
+        V2ManagerStub manager; QVERIFY(manager.listen());
+        const QJsonObject hardware{{"profile_id","field-vehicle"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}};
+        if (reverseOrder) manager.profileList.prepend(hardware); else manager.profileList.append(hardware);
+        RuntimeManagementWidget widget;
+        auto *mode = widget.findChild<QComboBox *>("managementMode");
+        auto *start = widget.findChild<QPushButton *>("managementStart");
+        QVERIFY(mode->isEnabled()); QCOMPARE(mode->currentIndex(), -1); QVERIFY(!start->isEnabled());
+        mode->setCurrentIndex(mode->findData(targetMode));
+        QVERIFY(widget.findChild<QLabel *>("managementEnvironment")->text().contains(targetMode == "mock" ? "模拟" : "实机"));
+        QCOMPARE(manager.requests.size(), 0);
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        QTRY_VERIFY(start->isEnabled()); QCOMPARE(mode->currentData().toString(), targetMode);
+        auto *profiles = widget.findChild<QComboBox *>("managementProfiles");
+        QCOMPARE(profiles->count(), 1);
+        QCOMPARE(profiles->currentData().toJsonObject()["mode"].toString(), targetMode);
+        QCOMPARE(manager.starts, 0);
+        widget.findChild<QPushButton *>("managementPreflight")->click();
+        QTRY_VERIFY(start->isEnabled()); start->click(); QTRY_COMPARE(manager.starts, 1);
+        QSet<QString> checked;
+        for (const auto &request : manager.requests) {
+            const auto method = request["method"].toString();
+            if (method != "start" && method != "preflight") continue;
+            const auto params = request["params"].toObject();
+            QCOMPARE(params["profile_id"].toString(), targetMode == "mock" ? QString("mock") : QString("field-vehicle"));
+            QCOMPARE(params["config_revision"].toString(), targetMode == "mock" ? QString("rev-A") : QString("rev-H"));
+            checked.insert(method);
+        }
+        QCOMPARE(checked, QSet<QString>({"start", "preflight"}));
+        QTRY_VERIFY(widget.findChild<QLabel *>("managementEnvironment")->text().contains("当前："));
+    }
+    void runningEnvironmentRequiresExplicitStopBeforeSwitch_data() {
+        QTest::addColumn<QString>("targetMode");
+        QTest::newRow("mock-to-hardware") << QString("hardware");
+        QTest::newRow("hardware-to-mock") << QString("mock");
+    }
+    void runningEnvironmentRequiresExplicitStopBeforeSwitch() {
+        QFETCH(QString, targetMode);
+        V2ManagerStub manager; manager.software = "ready";
+        manager.profileList.append(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
+        if (targetMode == "mock") { manager.activeProfile = "hardware"; manager.activeRevision = "rev-H"; }
+        QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        QSignalSpy endpoints(&widget, &RuntimeManagementWidget::controlEndpointReady);
+        auto *mode = widget.findChild<QComboBox *>("managementMode"); mode->setCurrentIndex(mode->findData(targetMode));
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *stop = widget.findChild<QPushButton *>("managementStop");
+        auto *start = widget.findChild<QPushButton *>("managementStart");
+        QTRY_VERIFY(stop->isEnabled()); QVERIFY(mode->isEnabled()); QCOMPARE(endpoints.size(), 0);
+        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true}});
+        QSignalSpy groups(&widget, &RuntimeManagementWidget::startPresetsRequested);
+        QVERIFY(!start->isEnabled()); start->click(); QCOMPARE(groups.size(), 0); QCOMPARE(manager.starts, 0);
+        QVERIFY(widget.findChild<QLabel *>("managementEnvironment")->text().contains("准备启动：" + targetMode));
+        stop->click(); QTRY_VERIFY(start->isEnabled());
+        QCOMPARE(mode->currentData().toString(), targetMode); QCOMPARE(manager.starts, 0); QCOMPARE(manager.stops, 1);
+        start->click(); QTRY_COMPARE(manager.starts, 1);
+        QTRY_COMPARE(endpoints.size(), 1);
+        QCOMPARE(manager.activeProfile, targetMode);
+        QCOMPARE(mode->currentData().toString(), targetMode);
+        QCOMPARE(groups.size(), 0);
+    }
+    void connectionWithoutEnvironmentDoesNotAdoptRunningHardware() {
+        QSettings settings("HostComputer", "Management"); settings.remove("desired_mode");
+        V2ManagerStub manager; manager.software = "ready"; manager.activeProfile = "hardware"; manager.activeRevision = "rev-H";
+        manager.profileList = {QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}}};
+        QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        QSignalSpy endpoints(&widget, &RuntimeManagementWidget::controlEndpointReady);
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        QTRY_VERIFY(widget.findChild<RuntimeService *>()->canStop());
+        auto *mode = widget.findChild<QComboBox *>("managementMode");
+        QCOMPARE(mode->currentIndex(), -1); QCOMPARE(endpoints.size(), 0);
+        QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
+        mode->setCurrentIndex(mode->findData("mock"));
+        QCOMPARE(mode->currentData().toString(), QString("mock")); QCOMPARE(endpoints.size(), 0);
+        QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
+        mode->setCurrentIndex(mode->findData("hardware")); QCOMPARE(endpoints.size(), 1);
+        QSignalSpy disconnected(&widget, &RuntimeManagementWidget::controlUnavailable);
+        mode->setCurrentIndex(mode->findData("mock")); QCOMPARE(disconnected.size(), 1);
+        QCOMPARE(manager.starts, 0); QCOMPARE(manager.stops, 0);
+    }
+    void wrongRuntimeAfterStartNeverConnectsOrStartsGroups() {
+        V2ManagerStub manager; manager.keepActiveProfileOnStart = true;
+        manager.activeProfile = "hardware"; manager.activeRevision = "rev-H";
+        manager.profileList.append(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
+        QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        QSignalSpy endpoints(&widget, &RuntimeManagementWidget::controlEndpointReady), groups(&widget, &RuntimeManagementWidget::startPresetsRequested);
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *start = widget.findChild<QPushButton *>("managementStart"); QTRY_VERIFY(start->isEnabled());
+        start->click(); QTRY_VERIFY(widget.findChild<RuntimeService *>()->canStop());
+        widget.setControlDiagnostics({{"ready",true},{"motion_presets_supported",true},{"robot_id","robot24"},
+            {"endpoint","127.0.0.1:9090"},{"connection_id","unexpected-hardware"}});
+        QCOMPARE(endpoints.size(), 0); QCOMPARE(groups.size(), 0); QVERIFY(!start->isEnabled());
+        QCOMPARE(widget.findChild<QComboBox *>("managementMode")->currentData().toString(), QString("mock"));
+    }
+    void pollingAndProfileRefreshKeepTheChosenEnvironment() {
+        V2ManagerStub manager; QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *service = widget.findChild<RuntimeService *>();
+        auto *mode = widget.findChild<QComboBox *>("managementMode");
+        auto *profiles = widget.findChild<QComboBox *>("managementProfiles");
+        auto *start = widget.findChild<QPushButton *>("managementStart");
+        QTRY_VERIFY(start->isEnabled()); manager.snapshotDelayMs = 300;
+        QTRY_VERIFY(!service->canQuery()); QVERIFY(mode->isEnabled());
+        QTRY_VERIFY(start->isEnabled());
+        manager.profileList.prepend(QJsonObject{{"profile_id","hardware"},{"mode","hardware"},
+            {"config_revision","rev-H"},{"required_modules",QJsonArray{"core","bridge"}}});
+        service->refreshProfiles();
+        QTRY_VERIFY(service->canStart());
+        QCOMPARE(mode->currentData().toString(), QString("mock"));
+        QCOMPARE(profiles->currentData().toJsonObject()["profile_id"].toString(), QString("mock"));
+        manager.profileList.removeLast(); service->refreshProfiles();
+        QTRY_COMPARE(profiles->count(), 0); QTRY_VERIFY(service->canStart());
+        QCOMPARE(mode->currentData().toString(), QString("mock")); QVERIFY(!start->isEnabled());
+        manager.profileList.append(QJsonObject{{"profile_id","replacement-mock"},{"mode","mock"},
+            {"config_revision","rev-B"},{"required_modules",QJsonArray{"core","bridge"}}});
+        service->refreshProfiles(); QTRY_COMPARE(profiles->count(), 1); QTRY_VERIFY(service->canStart());
+        QCOMPARE(profiles->currentIndex(), -1); QVERIFY(!start->isEnabled());
+        QVERIFY(profiles->isEnabled()); profiles->setCurrentIndex(0); QVERIFY(start->isEnabled());
+        widget.findChild<QPushButton *>("managementDisconnect")->click();
+        QVERIFY(mode->isEnabled()); QCOMPARE(mode->currentData().toString(), QString("mock"));
+        QCOMPARE(manager.starts, 0);
     }
     void unfinishedPreviousRunHasAnAccurateRecoveryPrompt() {
         V2ManagerStub manager; manager.recoveryRequired=true;manager.software="failed";QVERIFY(manager.listen());
@@ -182,6 +355,74 @@ private slots:
         QTRY_VERIFY(summary->text().contains("上次运行未正常结束"));
         QVERIFY(!widget.findChild<QPushButton *>("managementStart")->isEnabled());
         QTRY_VERIFY(widget.findChild<QPushButton *>("managementStop")->isEnabled());
+    }
+    void stopProgressAndFailureOverrideTheRecoveryPrompt_data() {
+        QTest::addColumn<QString>("diagnostic"); QTest::addColumn<QString>("expected");
+        QTest::newRow("ownership") << QString("{\"halt_result\":\"runtime ownership reconciliation in progress\"}") << QString("核对资源归属");
+        QTest::newRow("unavailable") << QString("{\"halt_result\":\"service unavailable\"}") << QString("停止服务不可用");
+        QTest::newRow("unconfirmed") << QString("{\"halt_result\":\"no confirmed stopped state\"}") << QString("残留进程尚未清理");
+    }
+    void stopProgressAndFailureOverrideTheRecoveryPrompt() {
+        QFETCH(QString, diagnostic); QFETCH(QString, expected);
+        RecoveryStopStub manager; manager.recoveryRequired = true; manager.software = "failed";
+        manager.operationId = "interrupted-start"; manager.taskState = "failed"; manager.taskError = "RECOVERY_REQUIRED";
+        QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        auto *stop = widget.findChild<QPushButton *>("managementStop");
+        auto *start = widget.findChild<QPushButton *>("managementStart");
+        auto *summary = widget.findChild<QLabel *>("presetState");
+        QTRY_VERIFY(stop->isEnabled()); QVERIFY(summary->text().contains("上次运行未正常结束"));
+        manager.taskState = "running"; manager.taskError.clear(); stop->click();
+        QVERIFY(summary->text().contains("正在停止"));
+        QTRY_COMPARE(manager.stops, 1); QTest::qWait(1100);
+        QVERIFY(summary->text().contains("正在停止")); QVERIFY(!stop->isEnabled()); QVERIFY(!start->isEnabled());
+        manager.taskState = "failed"; manager.taskError = "STOP_UNCONFIRMED"; manager.taskDiagnostic = diagnostic; manager.software = "failed";
+        QTRY_VERIFY(summary->text().contains("STOP_UNCONFIRMED")); QVERIFY(summary->text().contains(expected));
+        QVERIFY(!summary->text().contains("先停止系统完成恢复")); QVERIFY(!start->isEnabled());
+        QTRY_VERIFY(stop->isEnabled()); QCOMPARE(stop->text(), QString("重试停止系统")); QCOMPARE(manager.stops, 1);
+        manager.taskState = "running"; manager.taskError.clear(); manager.taskDiagnostic.clear(); stop->click();
+        QTRY_COMPARE(manager.stops, 2); QVERIFY(summary->text().contains("正在停止"));
+        manager.taskState = "succeeded"; manager.software = "stopped"; manager.recoveryRequired = false;
+        QTRY_VERIFY(start->isEnabled()); QVERIFY(!summary->text().contains("STOP_UNCONFIRMED"));
+        QCOMPARE(stop->text(), QString("停止系统")); QCOMPARE(manager.starts, 0);
+    }
+    void deployedManagerEnvironmentAndPreflight() {
+        const auto config=qgetenv("HOST_TEST_DEPLOYED_CONFIG");
+        if(config.isEmpty()) QSKIP("Explicit installed-manager opt-in required");
+        const auto previous=qgetenv("HOSTCOMPUTER_MANAGEMENT_CONFIG");
+        const bool existed=qEnvironmentVariableIsSet("HOSTCOMPUTER_MANAGEMENT_CONFIG");
+        const auto restore=qScopeGuard([&]{if(existed)qputenv("HOSTCOMPUTER_MANAGEMENT_CONFIG",previous);else qunsetenv("HOSTCOMPUTER_MANAGEMENT_CONFIG");});
+        qputenv("HOSTCOMPUTER_MANAGEMENT_CONFIG",config);
+        RuntimeManagementWidget widget; widget.show();
+        auto *mode=widget.findChild<QComboBox *>("managementMode");
+        auto *profiles=widget.findChild<QComboBox *>("managementProfiles");
+        auto *service=widget.findChild<RuntimeService *>();
+        QVERIFY(mode->isEnabled()); QVERIFY(!service->canQuery());
+        mode->setCurrentIndex(mode->findData("hardware"));
+        widget.findChild<QComboBox *>("motionPreset")->setCurrentIndex(2);
+        QSignalSpy mutations(service,&RuntimeService::mutationIssued);
+        QSignalSpy preflight(service,&RuntimeService::preflightReceived);
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        QTRY_VERIFY_WITH_TIMEOUT(service->canStart(),15000);
+        QCOMPARE(profiles->count(),1);
+        QCOMPARE(profiles->currentData().toJsonObject()["mode"].toString(),QString("hardware"));
+        mode->setCurrentIndex(mode->findData("mock"));
+        QTRY_COMPARE(profiles->currentData().toJsonObject()["mode"].toString(),QString("mock"));
+        auto *check=widget.findChild<QPushButton *>("managementPreflight");
+        QTRY_VERIFY(check->isEnabled()); check->click();
+        QTRY_COMPARE_WITH_TIMEOUT(preflight.size(),1,15000);
+        QVERIFY2(preflight.first()[0].toJsonObject()["passed"].toBool(),"Installed mock preflight failed");
+        QTest::qWait(1500);
+        QCOMPARE(mode->currentData().toString(),QString("mock")); QVERIFY(mode->isEnabled());
+        QCOMPARE(service->snapshot()["software_state"].toString(),QString("stopped"));
+        QVERIFY(!service->snapshot()["recovery_required"].toBool());
+        QCOMPARE(mutations.size(),0);
+        const auto screenshot=qEnvironmentVariable("HOST_TEST_DEPLOYED_SCREENSHOT");
+        if(!screenshot.isEmpty()) QVERIFY(widget.grab().save(screenshot));
+        service->close();
     }
     void explicitDeploymentConfigPrefillsWithoutConnecting_data() {
         QTest::addColumn<bool>("relativeToken");
@@ -245,7 +486,12 @@ private slots:
         widget.setControlDiagnostics({}); QCOMPARE(commands.size(),1); QVERIFY(!reset->isEnabled());
     }
     void presetDraftAndCapabilityGate() {
-        RuntimeManagementWidget widget;
+        V2ManagerStub manager; manager.software = "ready"; QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
+        widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
+        widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
+        widget.findChild<QPushButton *>("managementConnect")->click();
+        QTRY_VERIFY(widget.findChild<RuntimeService *>()->canStop());
         QSignalSpy changed(&widget,&RuntimeManagementWidget::pendingPresetsChanged);
         auto *base=widget.findChild<QCheckBox *>("preset_base"); QVERIFY(base);
         base->setChecked(false); QCOMPARE(changed.size(),1); QCOMPARE(widget.pendingPresets(),QJsonArray({"flippers","arm"}));
@@ -277,6 +523,7 @@ private slots:
     void automaticStartRequiresManagedEndpointAndNewConnection() {
         QTemporaryDir directory; QVERIFY(directory.isValid()); QSettings::setPath(QSettings::NativeFormat,QSettings::UserScope,directory.path());
         V2ManagerStub manager; QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        widget.findChild<QComboBox *>("managementMode")->setCurrentIndex(0);
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
         widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
         widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
@@ -322,6 +569,7 @@ private slots:
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsDirectory.path());
         QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, settingsDirectory.path());
         ConfigurationStub manager; QVERIFY(manager.listen()); RuntimeManagementWidget widget;
+        widget.findChild<QComboBox *>("managementMode")->setCurrentIndex(0);
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
         widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
         widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
@@ -377,6 +625,7 @@ private slots:
         QSettings::setPath(QSettings::NativeFormat, QSettings::UserScope, settingsDirectory.path());
         ManagerStub manager; QVERIFY(manager.listen());
         RuntimeManagementWidget widget;
+        widget.findChild<QComboBox *>("managementMode")->setCurrentIndex(0);
         QSignalSpy ready(&widget, &RuntimeManagementWidget::controlEndpointReady);
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
         widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());

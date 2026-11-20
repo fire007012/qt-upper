@@ -88,7 +88,7 @@ if(HOST_BUILD_WIDGET_TESTS)
         Qt${QT_VERSION_MAJOR}::Widgets Qt${QT_VERSION_MAJOR}::Test)
     add_test(NAME management_widget_flow COMMAND management_widget_test)
     set_tests_properties(management_widget_flow PROPERTIES
-        TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+        TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
     add_executable(keyboard_safety_test keyboard_safety_test.cpp
         ${HOST_ROOT}/src/controller/KeyboardController.cpp)
     target_include_directories(keyboard_safety_test PRIVATE ${HOST_ROOT}/src/controller)

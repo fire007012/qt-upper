@@ -28,6 +28,11 @@ QString profileMode(const QJsonObject &profile)
     if (profile["mode"] == QJsonValue("hardware")) return QStringLiteral("实机");
     return QStringLiteral("环境未知");
 }
+bool knownProfile(const QJsonObject &profile)
+{
+    return !profile["profile_id"].toString().isEmpty() && !profile["config_revision"].toString().isEmpty()
+        && (profile["mode"] == QJsonValue("mock") || profile["mode"] == QJsonValue("hardware"));
+}
 QString softwareName(const QString &state)
 {
     if (state == "stopped") return QStringLiteral("未启动");
@@ -52,10 +57,20 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     auto *connectionRow = new QHBoxLayout;
     m_connection = new QLabel(QStringLiteral("未连接"), this);
     m_connection->setObjectName("managementConnection"); connectionRow->addWidget(m_connection);
-    m_profileName = new QLabel(this); m_profileName->setObjectName("managementEnvironment"); connectionRow->addWidget(m_profileName); connectionRow->addStretch();
+    m_profileName = new QLabel(this); m_profileName->setObjectName("managementEnvironment");
+    m_profileName->setWordWrap(true); connectionRow->addWidget(m_profileName, 1);
     auto *connectButton = new QPushButton(QStringLiteral("连接"), this);
     auto *disconnectButton = new QPushButton(QStringLiteral("断开"), this);
     connectionRow->addWidget(connectButton); layout->addLayout(connectionRow);
+    auto *environmentRow = new QHBoxLayout;
+    environmentRow->addWidget(new QLabel(QStringLiteral("准备启动的环境"), this));
+    m_environmentMode = new QComboBox(this); m_environmentMode->setObjectName("managementMode");
+    m_environmentMode->setPlaceholderText(QStringLiteral("请先选择模拟或实机"));
+    m_environmentMode->addItem(QStringLiteral("mock / 模拟"), QStringLiteral("mock"));
+    m_environmentMode->addItem(QStringLiteral("hardware / 实机"), QStringLiteral("hardware"));
+    QSettings environmentSettings("HostComputer", "Management");
+    m_environmentMode->setCurrentIndex(m_environmentMode->findData(environmentSettings.value("desired_mode").toString()));
+    environmentRow->addWidget(m_environmentMode, 1); layout->addLayout(environmentRow);
     m_environmentHint = new QLabel(this);
     m_environmentHint->setObjectName("hardwareDeploymentHint");
     m_environmentHint->setWordWrap(true);
@@ -73,6 +88,7 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     m_token = new QLineEdit(connectionPage); m_token->setEchoMode(QLineEdit::Password);
     m_token->setPlaceholderText(QStringLiteral("部署令牌（仅在内存保留）"));
     m_profiles = new QComboBox(connectionPage);
+    m_profiles->setPlaceholderText(QStringLiteral("等待匹配所选环境的档案"));
     m_motionPreset = new QComboBox(connectionPage); m_motionPreset->setObjectName("motionPreset");
     m_motionPreset->setPlaceholderText(QStringLiteral("自定义选择"));
     m_motionPreset->addItem(QStringLiteral("底盘组"), QJsonArray{"base"});
@@ -81,9 +97,9 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     m_motionPreset->addItem(QStringLiteral("底盘和摆臂组"), QJsonArray{"flippers","base"});
     m_motionPreset->setCurrentIndex(2);
     form->addRow(QStringLiteral("下位机地址"), m_host); form->addRow(QStringLiteral("管理端口"), m_port);
-    form->addRow(QStringLiteral("认证令牌"), m_token); form->addRow(QStringLiteral("运行环境（下位机提供）"), m_profiles);
+    form->addRow(QStringLiteral("认证令牌"), m_token); form->addRow(QStringLiteral("部署档案（匹配所选环境）"), m_profiles);
     form->addRow(QStringLiteral("运动预设"), m_motionPreset);
-    auto *presetHint = new QLabel(QStringLiteral("运动预设同步启动页的勾选；模拟或实机由运行环境决定。"), connectionPage);
+    auto *presetHint = new QLabel(QStringLiteral("在启动页可提前选择模拟或实机；连接后仅匹配该环境的档案。切换环境需先停止系统，再检查、启动。"), connectionPage);
     presetHint->setWordWrap(true); form->addRow(presetHint);
     m_preflight = new QPushButton(QStringLiteral("检查连接与环境"), connectionPage);
     form->addRow(m_preflight); form->addRow(disconnectButton);
@@ -213,21 +229,24 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
         m_settingsScope = m_host->text().trimmed() + ':' + QString::number(m_port->value());
         if (!s.value(m_settingsScope + "/pending_request").toString().isEmpty())
             append(QStringLiteral("上次请求可能已被接受，先查询当前操作，不自动重新启动/停止。"));
-        m_feedback.clear(); m_activeToken = m_token->text();
+        m_feedback.clear(); m_stopPending = false; m_stopError.clear(); m_activeToken = m_token->text();
         record("operator_action", "connect");
         m_service.open(m_host->text(), static_cast<quint16>(m_port->value()), m_token->text());
         m_configuration->open(m_host->text(), static_cast<quint16>(m_port->value()), m_token->text());
     });
-    connect(disconnectButton, &QPushButton::clicked, this, [this] { m_startWhenReady = false; m_service.close(); m_configuration->close(); });
+    connect(disconnectButton, &QPushButton::clicked, this, [this] { m_startWhenReady = false; m_stopPending = false; m_service.close(); m_configuration->close(); });
     connect(m_configuration->service(), &ConfigurationService::sourceRevisionChanged, &m_service, &RuntimeService::refreshProfiles);
     connect(m_configuration->service(), &ConfigurationService::changed, this, [this] {
         m_service.setConfigurationBlocked(m_configuration->service()->blocksStart());
         updateActions();
     });
     connect(m_start, &QPushButton::clicked, this, [this] {
-        if (pendingPresets().isEmpty()) return;
+        if (!m_start->isEnabled() || pendingPresets().isEmpty() || !knownProfile(selectedProfile())) return;
         m_feedback.clear(); record("operator_action", QJsonObject{{"action","start"},{"presets",pendingPresets()}});
-        if (!m_service.canStart()) { emit startPresetsRequested(pendingPresets()); return; }
+        if (!m_service.canStart()) {
+            if (canStartSelectedGroups()) emit startPresetsRequested(pendingPresets());
+            return;
+        }
         m_startTarget = pendingPresets(); m_startWhenReady = true;
         m_expectedStartRobot.clear(); m_expectedStartEndpoint.clear();
         emit pendingPresetsChanged(m_startTarget);
@@ -253,6 +272,10 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     });
     connect(&m_service, &RuntimeService::errorOccurred, this, [this](const QString &text) {
         m_startWhenReady = false; record("management_error", text);
+        if (m_stopPending) {
+            m_stopPending = false;
+            m_stopError = QStringLiteral("停止请求未确认：%1。请重新连接并查询当前操作。").arg(text.left(180));
+        }
         m_feedback = QStringLiteral("操作未完成，请检查连接或查看运行日志。"); updateSummary();
     });
     connect(&m_service, &RuntimeService::controlEndpointReady, this,
@@ -269,36 +292,46 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
                 m_previousConnectionId = m_controlDiagnostics["connection_id"].toString();
             }
         }
-        emit controlEndpointReady(host, port, protocol, robotId);
+        const auto snapshot = m_service.snapshot();
+        m_managementEndpoint = {{"host", host}, {"port", port}, {"protocol", protocol}, {"robot_id", robotId},
+            {"profile_id", snapshot["profile_id"]}, {"config_revision", snapshot["config_revision"]}, {"operation_id", snapshot["operation_id"]}};
+        syncControlEndpoint();
     });
-    connect(&m_service, &RuntimeService::controlUnavailable, this, &RuntimeManagementWidget::controlUnavailable);
+    connect(&m_service, &RuntimeService::controlUnavailable, this, [this] {
+        m_managementEndpoint = {}; m_forwardedEndpoint.clear(); emit controlUnavailable();
+    });
     connect(&m_service, &RuntimeService::stateInvalidated, this, [this] {
         m_connection->setText(QStringLiteral("未连接"));
+        m_managementOperation = {};
+        m_availableProfiles = {}; rebuildProfiles();
         record("management_state", QJsonObject{{"state","unknown"}}, true); updateSummary();
     });
     connect(&m_service, &RuntimeService::profilesReceived, this, [this](const QJsonArray &profiles) {
-        QSettings s("HostComputer", "Management");
-        const auto previous = s.value(m_settingsScope + "/profile_id").toString();
-        const QSignalBlocker blocker(m_profiles);
-        m_profiles->clear();
-        for (const auto &v : profiles) {
-            const auto p = v.toObject();
-            m_profiles->addItem(QStringLiteral("%1 · %2").arg(p["profile_id"].toString(), profileMode(p)), p);
-            if (p["profile_id"].toString() == previous) m_profiles->setCurrentIndex(m_profiles->count() - 1);
-        }
-        record("profiles", profiles, true); updateActions();
+        m_availableProfiles = profiles; rebuildProfiles();
+        record("profiles", profiles, true); syncControlEndpoint(); updateActions();
+    });
+    connect(m_environmentMode, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this] {
+        QSettings s("HostComputer", "Management"); s.setValue("desired_mode", m_environmentMode->currentData().toString());
+        m_startWhenReady = false; m_feedback.clear(); rebuildProfiles();
+        record("environment_selection", m_environmentMode->currentData().toString()); syncControlEndpoint(); updateActions();
     });
     connect(m_profiles, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this] {
-        QSettings s("HostComputer", "Management"); s.setValue(m_settingsScope + "/profile_id", selectedProfile()["profile_id"].toString());
-        updateActions();
+        QSettings s("HostComputer", "Management");
+        s.setValue(m_settingsScope + "/profiles/" + m_environmentMode->currentData().toString(), selectedProfile()["profile_id"].toString());
+        m_startWhenReady = false; m_feedback.clear();
+        record("environment_selection", selectedProfile());
+        syncControlEndpoint(); updateActions();
     });
     connect(&m_service, &RuntimeService::mutationIssued, this, [this](const QString &id, const QString &method) {
+        m_managementOperation = {}; m_stopError.clear(); m_stopPending = method == "stop";
         QSettings s("HostComputer", "Management");
         const auto scope = m_settingsScope;
         s.setValue(scope + "/pending_request", id); s.setValue(scope + "/pending_method", method); s.sync();
         append(QStringLiteral("已提交%1，等待操作ID；超时不表示未执行。").arg(method));
+        updateSummary();
     });
     connect(&m_service, &RuntimeService::operationIdChanged, this, [this](const QString &id) {
+        if (m_managementOperation["operation_id"].toString() != id) m_managementOperation = {};
         QSettings s("HostComputer", "Management");
         const auto scope = m_settingsScope;
         s.setValue(scope + "/operation_id", id);
@@ -309,9 +342,10 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
         record("management_state", QJsonObject{{"software_state",snapshot["software_state"]},
             {"recovery_required",snapshot["recovery_required"]},{"safety",snapshot["safety"]},
             {"profile_id",snapshot["profile_id"]},{"modules",snapshot["modules"]}}, true);
-        updateSummary();
+        syncControlEndpoint(); updateSummary();
     });
     connect(&m_service, &RuntimeService::operationReceived, this, [this](const QJsonObject &op) {
+        m_managementOperation = op; m_stopPending = false; m_stopError.clear();
         record("management_operation", op, true);
         const auto outcome = op["operation_id"].toString() + '/' + op["state"].toString();
         if (QStringList{"failed","cancelled","result_unknown"}.contains(op["state"].toString())) {
@@ -333,7 +367,7 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
     });
     auto *journalTimer = new QTimer(this); journalTimer->setInterval(1000);
     connect(journalTimer, &QTimer::timeout, this, [this] {
-        m_journal.snapshot({{"page_open",true},{"selected_profile",selectedProfile()},{"draft_presets",pendingPresets()},{"management",m_service.snapshot()},
+        m_journal.snapshot({{"page_open",true},{"desired_mode",m_environmentMode->currentData().toString()},{"selected_profile",selectedProfile()},{"draft_presets",pendingPresets()},{"management",m_service.snapshot()},
             {"control",m_controlDiagnostics}}, {m_token->text(),m_activeToken});
         updateSummary();
     }); journalTimer->start();
@@ -359,10 +393,69 @@ RuntimeManagementWidget::~RuntimeManagementWidget()
     m_service.close();
     m_configuration->close();
     record("operator_page_closed", QJsonObject{});
-    m_journal.snapshot({{"page_open",false},{"selected_profile",selectedProfile()},
+    m_journal.snapshot({{"page_open",false},{"desired_mode",m_environmentMode->currentData().toString()},{"selected_profile",selectedProfile()},
         {"management",m_service.snapshot()},{"control",m_controlDiagnostics}}, {m_token->text(),m_activeToken});
 }
-QJsonObject RuntimeManagementWidget::selectedProfile() const { return m_profiles->currentData().toJsonObject(); }
+QJsonObject RuntimeManagementWidget::selectedProfile() const
+{
+    const auto profile = m_profiles->currentData().toJsonObject();
+    return profile["mode"].toString() == m_environmentMode->currentData().toString() ? profile : QJsonObject{};
+}
+void RuntimeManagementWidget::rebuildProfiles()
+{
+    const auto mode = m_environmentMode->currentData().toString();
+    QSettings settings("HostComputer", "Management");
+    const auto key = m_settingsScope + "/profiles/" + mode;
+    const auto previous = settings.value(key).toString();
+    const QSignalBlocker blocker(m_profiles);
+    m_profiles->clear();
+    int selected = -1;
+    for (const auto &value : m_availableProfiles) {
+        const auto profile = value.toObject();
+        if (!knownProfile(profile) || profile["mode"].toString() != mode) continue;
+        m_profiles->addItem(QStringLiteral("%1 · %2").arg(profile["profile_id"].toString(), profileMode(profile)), profile);
+        if (profile["profile_id"].toString() == previous) selected = m_profiles->count() - 1;
+    }
+    // An explicit mode choice can match one deployed profile; never fall back to another mode or a missing saved profile.
+    if (previous.isEmpty() && m_profiles->count() == 1) selected = 0;
+    m_profiles->setCurrentIndex(selected);
+    if (selected >= 0) settings.setValue(key, selectedProfile()["profile_id"].toString());
+}
+bool RuntimeManagementWidget::canStartSelectedGroups() const
+{
+    const auto profile = selectedProfile();
+    const auto snapshot = m_service.snapshot();
+    return knownProfile(profile) && snapshot["profile_id"] == profile["profile_id"]
+        && snapshot["config_revision"] == profile["config_revision"]
+        && m_service.canSelectProfile()
+        && QStringList{"ready","degraded"}.contains(snapshot["software_state"].toString())
+        && !snapshot["recovery_required"].toBool(true)
+        && m_controlDiagnostics["ready"].toBool() && m_controlDiagnostics["motion_presets_supported"].toBool()
+        && !m_controlDiagnostics["preset_flow_active"].toBool()
+        && !m_controlDiagnostics["emergency_active"].toBool()
+        && m_controlDiagnostics["server"].toObject()["runtime_global_inhibit"] != QJsonValue(true);
+}
+void RuntimeManagementWidget::syncControlEndpoint()
+{
+    const auto profile = selectedProfile();
+    const auto snapshot = m_service.snapshot();
+    const bool matches = knownProfile(profile) && !m_managementEndpoint.isEmpty()
+        && QStringList{"ready","degraded"}.contains(snapshot["software_state"].toString())
+        && !snapshot["recovery_required"].toBool(true)
+        && profile["profile_id"] == snapshot["profile_id"] && profile["config_revision"] == snapshot["config_revision"]
+        && snapshot["operation_id"] == m_managementEndpoint["operation_id"]
+        && profile["profile_id"] == m_managementEndpoint["profile_id"]
+        && profile["config_revision"] == m_managementEndpoint["config_revision"];
+    if (!matches) {
+        if (!m_forwardedEndpoint.isEmpty()) { m_forwardedEndpoint.clear(); emit controlUnavailable(); }
+        return;
+    }
+    const auto key = QString::fromUtf8(QJsonDocument(m_managementEndpoint).toJson(QJsonDocument::Compact));
+    if (key == m_forwardedEndpoint) return;
+    m_forwardedEndpoint = key;
+    emit controlEndpointReady(m_managementEndpoint["host"].toString(), static_cast<quint16>(m_managementEndpoint["port"].toInt()),
+        m_managementEndpoint["protocol"].toInt(), m_managementEndpoint["robot_id"].toString());
+}
 void RuntimeManagementWidget::syncMotionPreset()
 {
     const auto selected = pendingPresets();
@@ -394,18 +487,27 @@ void RuntimeManagementWidget::updateActions()
     const bool connected = m_controlDiagnostics["negotiated"].toBool() && m_controlDiagnostics["motion_presets_supported"].toBool();
     const bool ready = m_controlDiagnostics["ready"].toBool() && m_controlDiagnostics["motion_presets_supported"].toBool()
         && !m_controlDiagnostics["preset_flow_active"].toBool();
-    const auto software = m_service.snapshot()["software_state"].toString();
-    const auto activeProfile = m_service.snapshot()["profile_id"].toString();
-    const bool profileMatches = activeProfile.isEmpty() || activeProfile == selectedProfile()["profile_id"].toString();
-    m_profiles->setEnabled(m_service.canStart());
-    const bool canRunGroups = ready && profileMatches && (software.isEmpty() || QStringList{"ready","degraded"}.contains(software))
-        && !m_controlDiagnostics["emergency_active"].toBool()
-        && m_controlDiagnostics["server"].toObject()["runtime_global_inhibit"] != QJsonValue(true);
+    const auto state = m_service.snapshot()["software_state"].toString();
+    m_environmentMode->setEnabled(!m_startWhenReady && state != "starting" && state != "stopping"
+        && (m_service.snapshot().isEmpty() || m_service.canSelectProfile()));
+    m_environmentMode->setToolTip(QStringLiteral("连接前可选择；连接后只匹配该环境，不自动切换为另一种环境。"));
+    m_profiles->setEnabled(m_service.canSelectProfile() && !m_startWhenReady
+        && (m_profiles->count() > 1 || (m_profiles->count() == 1 && m_profiles->currentIndex() < 0)));
+    m_profiles->setToolTip(m_profiles->isEnabled()
+        ? QStringLiteral("选择与目标环境匹配的部署档案。")
+        : m_profiles->count() == 1 ? QStringLiteral("所选环境只有一个部署档案，已自动匹配。")
+        : QStringLiteral("请先连接管理服务，并等待启停或配置操作完成。"));
+    const bool canRunGroups = canStartSelectedGroups();
+    const auto target = selectedProfile();
+    const bool profileMatches = knownProfile(target) && m_service.snapshot()["profile_id"] == target["profile_id"]
+        && m_service.snapshot()["config_revision"] == target["config_revision"];
+    m_start->setText(m_environmentMode->currentIndex() < 0 ? QStringLiteral("一键启动")
+        : QStringLiteral("一键启动（%1）").arg(m_environmentMode->currentData() == QStringLiteral("mock") ? QStringLiteral("模拟") : QStringLiteral("实机")));
     m_start->setEnabled(!pendingPresets().isEmpty()
-        && ((m_service.canStart() && !selectedProfile().isEmpty()) || canRunGroups));
+        && !m_startWhenReady && ((m_service.canStart() && knownProfile(target)) || canRunGroups));
     m_presetHalt->setEnabled(connected && !pendingPresets().isEmpty());
-    m_presetSelect->setEnabled(ready && !pendingPresets().isEmpty());
-    m_presetRecover->setEnabled(ready && !pendingPresets().isEmpty());
+    m_presetSelect->setEnabled(ready && profileMatches && !pendingPresets().isEmpty());
+    m_presetRecover->setEnabled(ready && profileMatches && !pendingPresets().isEmpty());
     m_presetHaltAll->setEnabled(connected && !m_controlDiagnostics["selected_presets"].toArray().isEmpty());
     const bool fieldReady = m_controlDiagnostics["ready"].toBool() && !m_controlDiagnostics["preset_flow_active"].toBool();
     const auto actual = m_controlDiagnostics["server"].toObject();
@@ -449,7 +551,7 @@ void RuntimeManagementWidget::updateActions()
         else if (busy) reason = QStringLiteral("有操作正在执行或结果待确认，请先查询操作结果。");
         if (!reason.isEmpty()) m_recoveryHint->setText(reason);
     }
-    m_preflight->setEnabled(m_service.canStart() && !selectedProfile().isEmpty());
+    m_preflight->setEnabled(m_service.canStart() && knownProfile(selectedProfile()));
     m_stop->setEnabled(m_service.canStop()); updateSummary();
 }
 void RuntimeManagementWidget::record(const QString &event, const QJsonValue &data, bool changed)
@@ -486,33 +588,39 @@ void RuntimeManagementWidget::updateSummary()
     const bool negotiated = diagnostics["negotiated"].toBool();
     const bool fresh = diagnostics["ready"].toBool() && status["runtime_fresh"].toBool();
     const auto software = m_service.snapshot();
-    QString environment = selectedProfile().isEmpty() ? QStringLiteral("待选环境：未知")
-        : QStringLiteral("待选：%1 · %2").arg(selectedProfile()["profile_id"].toString(), profileMode(selectedProfile()));
+    const auto targetProfile = selectedProfile();
+    const auto targetMode = m_environmentMode->currentData().toString();
+    const auto targetName = targetMode == "mock" ? QStringLiteral("模拟") : QStringLiteral("实机");
+    QString environment = targetMode.isEmpty() ? QStringLiteral("请选择运行环境")
+        : targetProfile.isEmpty() ? QStringLiteral("准备启动：%1（待匹配档案）").arg(targetName)
+        : QStringLiteral("准备启动：%1 · %2").arg(targetProfile["profile_id"].toString(), profileMode(targetProfile));
     const auto activeId = software["profile_id"].toString();
     const auto softwareState = software["software_state"].toString();
     if (!activeId.isEmpty() && QStringList{"starting","ready","degraded","stopping"}.contains(softwareState)) {
         QString mode = QStringLiteral("环境未知");
-        for (int i = 0; i < m_profiles->count(); ++i) {
-            const auto profile = m_profiles->itemData(i).toJsonObject();
+        for (const auto &value : m_availableProfiles) {
+            const auto profile = value.toObject();
             if (profile["profile_id"] == QJsonValue(activeId)
                 && profile["config_revision"] == software["config_revision"]) mode = profileMode(profile);
         }
         environment = QStringLiteral("当前：%1 · %2").arg(activeId, mode);
+        if (targetMode.isEmpty()) environment += QStringLiteral("；请选择目标环境");
+        else if (targetProfile.isEmpty()) environment += QStringLiteral("；准备启动：%1（待匹配档案）").arg(targetName);
+        else if (targetProfile["profile_id"] != software["profile_id"]
+            || targetProfile["config_revision"] != software["config_revision"])
+            environment += QStringLiteral("；准备启动：%1 · %2").arg(targetProfile["profile_id"].toString(), profileMode(targetProfile));
     }
     m_profileName->setText(environment);
-    bool hardwareAvailable = false;
-    bool activeMock = false;
-    for (int i = 0; i < m_profiles->count(); ++i) {
-        const auto profile = m_profiles->itemData(i).toJsonObject();
-        hardwareAvailable |= profile["mode"] == QJsonValue("hardware");
-        activeMock |= profile["profile_id"] == QJsonValue(activeId)
-            && profile["mode"] == QJsonValue("mock");
-    }
     const bool running = QStringList{"starting","ready","degraded","stopping"}.contains(softwareState);
-    m_environmentHint->setVisible(!software.isEmpty() && (!hardwareAvailable || (activeMock && running)));
-    m_environmentHint->setText(!hardwareAvailable
-        ? QStringLiteral("服务未提供实机档案（hardware），当前不能控制真实电机。请先完成下位机实机档案、CAN 接口和参数部署；接上电机不会自动切换环境。")
-        : QStringLiteral("当前软件仍运行在模拟环境。请先停止系统，再选择实机档案并预检、启动。"));
+    const bool differentTarget = running && !targetProfile.isEmpty()
+        && (targetProfile["profile_id"] != software["profile_id"] || targetProfile["config_revision"] != software["config_revision"]);
+    m_environmentHint->setVisible(!software.isEmpty() && (differentTarget || targetProfile.isEmpty()));
+    m_environmentHint->setText(differentTarget
+        ? QStringLiteral("当前系统与所选目标环境不同。请先点击“停止系统”，再检查所选环境并点击“一键启动”；不会自动切换环境。")
+        : targetMode.isEmpty() ? QStringLiteral("请先选择模拟或实机环境，再启动。")
+        : m_profiles->count() == 0
+        ? QStringLiteral("服务未提供%1档案（%2）。已保留你的选择，不能启动；请核对下位机部署或管理地址。").arg(targetName, targetMode)
+        : QStringLiteral("请在连接设置中选择匹配的部署档案；原档案失效时不会自动改选其他档案。"));
     const QStringList ids{"flippers","base","arm"};
     for (int i = 0; i < ids.size(); ++i) {
         const auto preset = status["presets"].toObject()[ids[i]].toObject();
@@ -537,7 +645,28 @@ void RuntimeManagementWidget::updateSummary()
         m_groupStates[i]->setText(text);
     }
     QString summary;
-    if (software["recovery_required"].toBool()) summary = QStringLiteral("上次运行未正常结束，请先停止系统完成恢复。");
+    const auto operationState = m_managementOperation["state"].toString();
+    const bool stopOperation = m_managementOperation["method"] == QJsonValue("stop");
+    const bool stopping = m_stopPending || softwareState == "stopping"
+        || (stopOperation && QStringList{"accepted","running"}.contains(operationState));
+    const bool stopFailed = stopOperation && QStringList{"failed","cancelled"}.contains(operationState);
+    m_stop->setText(stopping ? QStringLiteral("正在停止…") : stopFailed ? QStringLiteral("重试停止系统") : QStringLiteral("停止系统"));
+    if (stopping) summary = QStringLiteral("正在停止系统并核对残留进程，请等待操作结果；完成前不能重新启动。");
+    else if (!m_stopError.isEmpty()) summary = m_stopError;
+    else if (stopFailed) {
+        const auto error = m_managementOperation["error"].toObject();
+        const auto code = error["code"].toString();
+        const auto diagnostic = error["diagnostic"].toString();
+        if (code == "STOP_UNCONFIRMED") {
+            const auto reason = diagnostic.contains("ownership reconciliation in progress")
+                ? QStringLiteral("下位机运行服务仍在核对资源归属，无法确认停止")
+                : diagnostic.contains("service unavailable") ? QStringLiteral("下位机停止服务不可用，无法确认停止")
+                : QStringLiteral("下位机未确认停止，残留进程尚未清理");
+            summary = QStringLiteral("停止未完成（STOP_UNCONFIRMED）：%1。请检查下位机运行服务。").arg(reason);
+        } else summary = QStringLiteral("停止未完成（%1）：%2。请检查下位机运行服务。")
+            .arg(code.isEmpty() ? operationState : code, error["message"].toString().left(180));
+    }
+    else if (software["recovery_required"].toBool()) summary = QStringLiteral("上次运行未正常结束，请先停止系统完成恢复。");
     else if (diagnostics["emergency_intent_latched"].toBool()
         || (diagnostics["ready"].toBool() && status["emergency_active"] == QJsonValue(true)))
         summary = m_journal.healthy() ? QStringLiteral("上次急停仍然锁存，请点击“处理急停”。") : QStringLiteral("急停仍锁存；运行日志保存失败。");
@@ -545,6 +674,9 @@ void RuntimeManagementWidget::updateSummary()
     else if (status["runtime_global_inhibit"] == QJsonValue(true))
         summary = status["global_stop_reset_ready"] == QJsonValue(false)
             ? QStringLiteral("正在停止，请等待清理完成。") : QStringLiteral("运动已禁止，请在更多控制中显式复位。");
+    else if (targetMode.isEmpty()) summary = QStringLiteral("请先选择模拟或实机环境，再连接下位机。");
+    else if (!software.isEmpty() && !knownProfile(targetProfile)) summary = QStringLiteral("所选%1环境尚无匹配档案，暂不可启动。").arg(targetName);
+    else if (differentTarget) summary = QStringLiteral("目标环境与当前运行不同，请先停止系统，再启动所选环境。");
     else if (!m_feedback.isEmpty()) summary = m_feedback;
     else if (software["software_state"] == QJsonValue("starting") || m_startWhenReady || diagnostics["preset_flow_active"].toBool())
         summary = QStringLiteral("正在启动所选运动组，请保持归中…");
@@ -591,9 +723,11 @@ void RuntimeManagementWidget::setControlDiagnostics(const QJsonObject &diagnosti
         && !diagnostics["connection_id"].toString().isEmpty()
         && diagnostics["connection_id"].toString() != m_previousConnectionId) {
         m_startWhenReady = false;
-        if (diagnostics["emergency_active"].toBool() || status["runtime_global_inhibit"] == QJsonValue(true)) {
-            record("start_blocked",QStringLiteral("软件启动完成，急停锁存或全局禁止尚未解除")); updateSummary();
+        if (m_service.snapshot()["profile_id"] != QJsonValue(m_startProfile)
+            || m_service.snapshot()["config_revision"] != QJsonValue(m_startRevision) || !canStartSelectedGroups()) {
+            record("start_blocked",QStringLiteral("运行档案与所选环境不一致，或控制条件尚未满足")); updateSummary();
         } else if (supported) emit startPresetsRequested(m_startTarget);
         else append(QStringLiteral("软件已启动，但服务端缺少运动预设能力；分组启动未执行。"));
+        updateActions();
     }
 }

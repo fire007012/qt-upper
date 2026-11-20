@@ -67,11 +67,13 @@ private slots:
         QCOMPARE(profile["mode"].toString(),QString("mock"));
         const auto requested=QJsonDocument::fromJson(qgetenv("HOST_INSTALLED_PRESETS"));
         const QJsonArray presets=requested.isArray()?requested.array():QJsonArray{"flippers","base","arm"};
-        QVERIFY(manager.preflight(profile["profile_id"].toString(),profile["config_revision"].toString(),presets));
+        const auto softwareRequested=QJsonDocument::fromJson(qgetenv("HOST_INSTALLED_SOFTWARE_PRESETS"));
+        const QJsonArray softwarePresets=softwareRequested.isArray()?softwareRequested.array():presets;
+        QVERIFY(manager.preflight(profile["profile_id"].toString(),profile["config_revision"].toString(),softwarePresets));
         QTRY_VERIFY_WITH_TIMEOUT(!preflight.isEmpty(),15000);
         QVERIFY2(preflight["passed"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(preflight).toJson())));
         QTRY_VERIFY(manager.canStart());
-        QVERIFY(manager.start(profile["profile_id"].toString(),profile["config_revision"].toString(),presets));
+        QVERIFY(manager.start(profile["profile_id"].toString(),profile["config_revision"].toString(),softwarePresets));
         QTRY_VERIFY_WITH_TIMEOUT(manager.snapshot()["software_state"]==QJsonValue("ready") && port,150000);
         watchHealth=true;
         QCOMPARE(host,QString("127.0.0.1")); QCOMPARE(robot,QString("robot24"));

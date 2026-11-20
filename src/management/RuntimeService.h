@@ -13,6 +13,7 @@ public:
     bool stop();
     bool preflight(const QString &profile, const QString &revision, const QJsonArray &presets = {});
     bool canStart() const;
+    bool canSelectProfile() const;
     bool canStop() const;
     void refreshProfiles() { m_refreshProfiles = true; }
     void setConfigurationBlocked(bool blocked) { if (m_configurationBlocked != blocked) { m_configurationBlocked = blocked; emit availabilityChanged(); } }
