@@ -124,7 +124,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="只读显示下位机管理服务的上位机连接参数；不连接或启动服务。")
     parser.add_argument("--config", type=Path,
                         default=Path(os.environ.get("HOSTCOMPUTER_MANAGEMENT_CONFIG")
-                                     or str(Path.home() / "ros2_ws_car/linked-runtime/manager.json")),
+                                     or str(Path.home() / "robot24-portable/runtime/manager.json")),
                         help="与 run_manager.sh 实际使用的管理 JSON 相同")
     parser.add_argument("--hide-token", action="store_true", help="隐藏令牌，便于分享排查输出")
     parser.add_argument("--local", action="store_true", help="同机连接；监听允许时显示 127.0.0.1")

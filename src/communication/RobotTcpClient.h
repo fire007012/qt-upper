@@ -200,6 +200,7 @@ private:
     qint64 m_lastMessageReceivedMs;
     qint64 m_lastHeartbeatAckMs;
     qint64 m_connectedAtMs = -1;
+    qint64 m_syncStartedAtMs = -1;
     bool m_operatorControlEnabled = false;
     ConnectionState m_connectionState = ConnectionState::Disconnected;
     bool m_latestInputNeutral = false;

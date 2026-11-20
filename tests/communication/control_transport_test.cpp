@@ -114,6 +114,19 @@ private slots:
         peer.freshness=true; QTRY_VERIFY(client.controlDiagnostics()["ready"].toBool());
         QVERIFY(!client.isOperatorControlEnabled());
     }
+    void temporaryTokenLossAfterLongConnectionKeepsTransport() {
+        ControlPeer peer; RobotTcpClient client; start(peer,client); authorize(client);
+        QTest::qWait(10500);
+        const auto connections=peer.acceptedConnections;
+        peer.freshness=false;
+        QTRY_VERIFY_WITH_TIMEOUT(!client.isOperatorControlEnabled(),1000);
+        QTest::qWait(700);  // Below the separate 1.5 s control lease deadline.
+        QCOMPARE(peer.acceptedConnections,connections);
+        QVERIFY(client.isConnected());
+        peer.freshness=true;
+        QTRY_VERIFY(client.controlDiagnostics()["ready"].toBool());
+        QVERIFY(!client.isOperatorControlEnabled());
+    }
     void expiredRuntimeRevokesAndReconnects() {
         ControlPeer peer; RobotTcpClient client; start(peer,client); authorize(client); peer.status=false;
         QTRY_VERIFY_WITH_TIMEOUT(!client.isOperatorControlEnabled(),1000);

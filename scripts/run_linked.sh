@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 host_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-host_config="${HOSTCOMPUTER_MANAGEMENT_CONFIG:-$host_root/../ros2_ws_car/linked-runtime/manager.json}"
+host_config="${HOSTCOMPUTER_MANAGEMENT_CONFIG:-$HOME/robot24-portable/runtime/manager.json}"
 host_binary="${HOSTCOMPUTER_BINARY:-$host_root/build-linked/hostcomputer}"
 if [[ "${1:-}" == "--vehicle" ]]; then
     if [[ -z "${2:-}" || "$2" == -* ]]; then

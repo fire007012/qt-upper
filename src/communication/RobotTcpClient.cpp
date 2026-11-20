@@ -222,6 +222,10 @@ void RobotTcpClient::configureControlV2(const QString &robotId)
 void RobotTcpClient::setConnectionState(ConnectionState state)
 {
     if (m_connectionState == state) return;
+    const bool syncing = state == ConnectionState::Syncing || state == ConnectionState::Negotiating;
+    const bool wasSyncing = m_connectionState == ConnectionState::Syncing || m_connectionState == ConnectionState::Negotiating;
+    if (syncing && !wasSyncing) m_syncStartedAtMs = m_clock.elapsed();
+    if (!syncing) m_syncStartedAtMs = -1;
     m_connectionState = state;
     QString name;
     switch (state) {
@@ -706,7 +710,7 @@ void RobotTcpClient::checkConnection()
             recoverConnection(QStringLiteral("Heartbeat ACK timeout; reconnecting bridge"));
             return;
         }
-        if ((!m_stateSynchronized || (!m_requiredCapabilities.isEmpty() && !m_capabilitiesVerified)) && now - m_connectedAtMs >= CONNECT_TIMEOUT_MS) {
+        if ((!m_stateSynchronized || (!m_requiredCapabilities.isEmpty() && !m_capabilitiesVerified)) && m_syncStartedAtMs >= 0 && now - m_syncStartedAtMs >= CONNECT_TIMEOUT_MS) {
             recoverConnection(QStringLiteral("Bridge state synchronization timed out"));
             return;
         }

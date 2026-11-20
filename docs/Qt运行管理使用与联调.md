@@ -1,6 +1,6 @@
 # Qt 运行管理与构建
 
-更新：2026-11-17。管理协议 v1，默认 TCP `9091`；控制使用独立 v2 连接。日常入口见 [启动与控制](上下位机启动与控制说明.md)，接口依据为下位机 [管理协议39](../ros2_ws_car/src/docs/archive/qt/39_下位机管理协议与Qt对接.md)。
+更新：2026-11-20。管理协议 v1，默认 TCP `9091`；控制使用独立 v2 连接。运行配置为 `~/robot24-portable/runtime/manager.json`，下位机入口为 `bash ~/robot24-portable/run_manager.sh`；旧 linked-* 目录和兼容入口已移除。日常入口见 [启动与控制](上下位机启动与控制说明.md)，接口依据为下位机 [管理协议39](../ros2_ws_car/src/docs/archive/qt/39_下位机管理协议与Qt对接.md)。
 
 ## 连接与启停
 

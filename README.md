@@ -9,6 +9,17 @@ Qt 通过 TCP/JSON 连接下位机 ROS2 `host_bridge`（默认9090）；独立�
 - [视频联调](docs/ROS2视频联调说明.md) / [手柄键盘](docs/手柄键盘控制说明.md)
 - [当前计划与职责](docs/上位机ROS2适配与可靠性重构计划.md) / [独立通信测试](tests/communication/README.md)
 
+日常联动使用独立部署，不依赖源码工作区的构建目录：
+
+```bash
+# 终端 1：下位机管理服务
+bash ~/robot24-portable/run_manager.sh
+# 终端 2：上位机
+bash ~/hostcomputer/scripts/run_linked.sh
+```
+
+上位机默认读取 `~/robot24-portable/runtime/manager.json`。源码工作区 `~/ros2_ws_car` 只保留 build、install、log、src；旧 linked-* 目录、兼容链接及旧部署备份已删除。详细操作见 [启动与控制](docs/上下位机启动与控制说明.md)。
+
 本机 Qt6.12 环境的一次性构建与回归入口：
 
 ```sh
