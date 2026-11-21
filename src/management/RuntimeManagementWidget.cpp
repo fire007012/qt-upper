@@ -622,6 +622,7 @@ void RuntimeManagementWidget::updateSummary()
         ? QStringLiteral("服务未提供%1档案（%2）。已保留你的选择，不能启动；请核对下位机部署或管理地址。").arg(targetName, targetMode)
         : QStringLiteral("请在连接设置中选择匹配的部署档案；原档案失效时不会自动改选其他档案。"));
     const QStringList ids{"flippers","base","arm"};
+    QStringList selectedFaults;
     for (int i = 0; i < ids.size(); ++i) {
         const auto preset = status["presets"].toObject()[ids[i]].toObject();
         const auto states = preset["states"].toObject();
@@ -642,7 +643,25 @@ void RuntimeManagementWidget::updateSummary()
             else if (state == "Fault" || state == "Faulted") text = QStringLiteral("故障");
             else text = QStringLiteral("状态未知");
         }
-        m_groupStates[i]->setText(text);
+        QStringList reasons;
+        if (fresh) {
+            const auto groupDiagnostics = preset["diagnostics"].toObject();
+            for (auto it = groupDiagnostics.begin(); it != groupDiagnostics.end(); ++it) {
+                const auto detail = it.value().toObject();
+                if (states[it.key()] != QJsonValue("Fault") && states[it.key()] != QJsonValue("Faulted")
+                    && detail["state"] != QJsonValue(3)) continue;
+                const auto reason = detail["reason"].toString();
+                if (!reason.isEmpty()) reasons << it.key() + ": " + reason;
+            }
+            bool fault = false;
+            for (const auto &value : states) fault |= value == QJsonValue("Fault") || value == QJsonValue("Faulted");
+            if (fault && (preset["selected"].toBool() || diagnostics["selected_presets"].toArray().contains(ids[i])))
+                selectedFaults << QStringLiteral("%1：%2").arg(preset["label"].toString(ids[i]),
+                    reasons.isEmpty() ? QStringLiteral("下位机未提供具体原因") : reasons.join("；"));
+        }
+        m_groupStates[i]->setText(reasons.isEmpty() ? text : text + "\n" + reasons.join("\n").left(360));
+        m_groupStates[i]->setWordWrap(true);
+        m_groupStates[i]->setToolTip(reasons.join('\n'));
     }
     QString summary;
     const auto operationState = m_managementOperation["state"].toString();
@@ -677,6 +696,8 @@ void RuntimeManagementWidget::updateSummary()
     else if (targetMode.isEmpty()) summary = QStringLiteral("请先选择模拟或实机环境，再连接下位机。");
     else if (!software.isEmpty() && !knownProfile(targetProfile)) summary = QStringLiteral("所选%1环境尚无匹配档案，暂不可启动。").arg(targetName);
     else if (differentTarget) summary = QStringLiteral("目标环境与当前运行不同，请先停止系统，再启动所选环境。");
+    else if (!selectedFaults.isEmpty()) summary = QStringLiteral("下位机运动组故障，已禁止控制：%1。处理原因后，在“更多控制”中恢复所选组，再显式启动。")
+        .arg(selectedFaults.join("；").left(600));
     else if (!m_feedback.isEmpty()) summary = m_feedback;
     else if (software["software_state"] == QJsonValue("starting") || m_startWhenReady || diagnostics["preset_flow_active"].toBool())
         summary = QStringLiteral("正在启动所选运动组，请保持归中…");

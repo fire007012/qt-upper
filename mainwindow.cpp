@@ -248,6 +248,8 @@ MainWindow::MainWindow(QWidget *parent)
         const auto diagnostics = m_controller->controlDiagnostics();
         runtimeWidget->setControlDiagnostics(diagnostics);
         const auto actual = diagnostics["server"].toObject();
+        if (m_controlPanel) m_controlPanel->setKeyboardContext(modeNameForProtocol(m_controlMode),
+            diagnostics["selected_presets"].toArray(), diagnostics["negotiated"].toBool() && diagnostics["motion_presets_supported"].toBool());
         const auto globalStop = actual["global_stop"].toObject();
         ui->btn_clear_emergency->setEnabled(diagnostics["global_stop_supported"].toBool() && diagnostics["ready"].toBool()
             && actual["global_stop_reset_ready"] != QJsonValue(false)
@@ -1435,6 +1437,9 @@ void MainWindow::applyControlMode(ControlMode mode)
     ui->label_mode_value->setText(modeText);
     if (m_controlPanel) {
         m_controlPanel->setModeText(modeText);
+        const auto diagnostics = m_controller->controlDiagnostics();
+        m_controlPanel->setKeyboardContext(modeNameForProtocol(mode), diagnostics["selected_presets"].toArray(),
+            diagnostics["negotiated"].toBool() && diagnostics["motion_presets_supported"].toBool());
     }
     if (m_telemetryPanel) {
         m_telemetryPanel->setModeText(modeText);

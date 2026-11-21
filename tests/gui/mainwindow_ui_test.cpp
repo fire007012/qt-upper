@@ -105,6 +105,35 @@ private slots:
         if (!qEnvironmentVariable("HOST_TEST_WINDOW_SCREENSHOT").isEmpty())
             QVERIFY(window.grab().save(qEnvironmentVariable("HOST_TEST_WINDOW_SCREENSHOT"), "PNG"));
     }
+    void keyboardHelpTracksModeAndSelectedGroups() {
+        MainWindow window;
+        auto *panel = window.findChild<ControlPanelWidget *>();
+        auto *help = window.findChild<QLabel *>("keyboardControlHelp");
+        QVERIFY(panel && help);
+        panel->setKeyboardContext("vehicle", {"flippers"}, true);
+        QVERIFY(help->text().contains("Y/H 左前"));
+        QVERIFY(help->text().contains("U/J 右前"));
+        QVERIFY(help->text().contains("I/K 左后"));
+        QVERIFY(help->text().contains("O/L 右后"));
+        QVERIFY(!help->text().contains("W/S 前进后退"));
+        panel->setKeyboardContext("vehicle", {"base"}, true);
+        QVERIFY(help->text().contains("W/S 前进后退"));
+        QVERIFY(!help->text().contains("Y/H 左前"));
+        panel->setKeyboardContext("vehicle", {"arm"}, true);
+        QVERIFY(help->text().contains("需切换到机械臂模式"));
+        const QJsonObject snapshot{{"type", "system_snapshot"}, {"control_mode", "arm"}};
+        QVERIFY(QMetaObject::invokeMethod(&window, "onProtocolMessageReceived", Q_ARG(QJsonObject, snapshot)));
+        QVERIFY(help->text().contains("U/O X+/−"));
+        QVERIFY(help->text().contains("K/I 绕Y+/−"));
+        QVERIFY(help->text().contains("F 打开，H 闭合"));
+        QVERIFY(!help->text().contains("W/S 前进后退"));
+        panel->setKeyboardContext("arm", {"flippers"}, true);
+        QVERIFY(help->text().contains("机械臂组未选中"));
+        QVERIFY(!help->text().contains("F 打开"));
+        panel->setKeyboardContext("vehicle", {}, false);
+        QVERIFY(help->text().contains("运动组尚未同步"));
+        QVERIFY(help->text().contains("空格：全车急停"));
+    }
 };
 QTEST_MAIN(MainWindowUiTest)
 #include "mainwindow_ui_test.moc"

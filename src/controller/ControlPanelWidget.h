@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QWidget>
+#include <QJsonArray>
 
 class GamepadDisplayWidget;
 class QLabel;
@@ -23,6 +24,7 @@ public:
     void setKeyboardSource(bool keyboard);
     void setKeyboardKeys(const QStringList &keys);
     void setKeyboardCaptureActive(bool active);
+    void setKeyboardContext(const QString &mode, const QJsonArray &presets, bool presetAware);
 
 signals:
     void emergencyStopRequested();

@@ -485,6 +485,30 @@ private slots:
         diagnostics["speed_change_pending"]=true; widget.setControlDiagnostics(diagnostics); QVERIFY(!speed->isEnabled());
         widget.setControlDiagnostics({}); QCOMPARE(commands.size(),1); QVERIFY(!reset->isEnabled());
     }
+    void selectedFlipperFaultShowsBackendReasonAndExpires() {
+        RuntimeManagementWidget widget;
+        const QString reason = "left_front_arm_joint: stable feedback timeout";
+        QJsonObject flippers{{"label", "摆臂"}, {"selected", true},
+            {"states", QJsonObject{{"flippers", "Fault"}}},
+            {"diagnostics", QJsonObject{{"flippers", QJsonObject{{"state", 3}, {"reason", reason}}}}}};
+        QJsonObject status{{"runtime_fresh", true}, {"presets", QJsonObject{{"flippers", flippers}}}};
+        QJsonObject diagnostics{{"ready", true}, {"negotiated", true},
+            {"selected_presets", QJsonArray{"flippers"}}, {"server", status}};
+        widget.setControlDiagnostics(diagnostics);
+        auto *state = widget.findChild<QLabel *>("groupState_flippers");
+        auto *summary = widget.findChild<QLabel *>("presetState");
+        QVERIFY(state->text().contains(reason));
+        QVERIFY(state->toolTip().contains(reason));
+        QVERIFY(summary->text().contains("下位机运动组故障"));
+        QVERIFY(summary->text().contains(reason));
+        status["runtime_fresh"] = false; diagnostics["server"] = status;
+        widget.setControlDiagnostics(diagnostics);
+        QVERIFY(!state->text().contains(reason));
+        QVERIFY(state->toolTip().isEmpty());
+        QVERIFY(!summary->text().contains(reason));
+        widget.setControlDiagnostics({});
+        QCOMPARE(state->text(), QString("未连接"));
+    }
     void presetDraftAndCapabilityGate() {
         V2ManagerStub manager; manager.software = "ready"; QVERIFY(manager.listen()); RuntimeManagementWidget widget;
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
@@ -543,12 +567,18 @@ private slots:
         widget.setControlDiagnostics(ready); QCOMPARE(requested.size(),1);
         QVERIFY(start->isEnabled()); start->click(); QCOMPARE(requested.size(),2); QCOMPARE(manager.starts,1);
     }
+    void managementPreflightAndStartCarryOnlyTheSelectedPreset_data() {
+        QTest::addColumn<QString>("preset");
+        for (const auto &id : QStringList{"base", "flippers", "arm"}) QTest::newRow(qPrintable(id)) << id;
+    }
     void managementPreflightAndStartCarryOnlyTheSelectedPreset() {
+        QFETCH(QString, preset);
         V2ManagerStub manager;QVERIFY(manager.listen());RuntimeManagementWidget widget;
         widget.findChild<QLineEdit *>("managementHost")->setText("127.0.0.1");
         widget.findChild<QSpinBox *>("managementPort")->setValue(manager.port());
         widget.findChild<QLineEdit *>("managementToken")->setText(manager.token());
-        widget.findChild<QComboBox *>("motionPreset")->setCurrentIndex(0);
+        for (const auto &id : QStringList{"base", "flippers", "arm"})
+            widget.findChild<QCheckBox *>("preset_" + id)->setChecked(id == preset);
         widget.findChild<QPushButton *>("managementConnect")->click();
         auto *service=widget.findChild<RuntimeService *>();QTRY_VERIFY(service->canStart());
         widget.findChild<QPushButton *>("managementPreflight")->click();
@@ -558,7 +588,7 @@ private slots:
         for(const auto &request:manager.requests) {
             const auto method=request["method"].toString();
             if(method=="start" || method=="preflight") {
-                QCOMPARE(request["params"].toObject()["presets"].toArray(),QJsonArray{"base"});seen.insert(method);
+                QCOMPARE(request["params"].toObject()["presets"].toArray(),QJsonArray{preset});seen.insert(method);
             }
         }
         QCOMPARE(seen,QSet<QString>({"start","preflight"}));

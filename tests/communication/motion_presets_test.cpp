@@ -15,6 +15,8 @@ public:
     bool omitDiagnostics = false;
     QList<QJsonObject> queue, wire, commands;
     QHash<QString,QJsonObject> ops;
+    QHash<QString,qint64> issuedAt;
+    int operationDelayMs = 0;
     QString epoch = "e1", failure, rejectEpochCommand;
     bool rejectedEpoch = false;
     int generation = 1, selections = 0;
@@ -72,10 +74,13 @@ public:
                 if (drop) continue;
                 commands.append(m); const auto id = m["request_id"].toString();
                 QJsonObject op{{"operation_id","outer-"+id},{"request_id",id},{"robot_id","robot24"},{"epoch",epoch},{"command",m["command"]},{"state","accepted"},{"created_at",123},{"invalidated",false},{"error",QJsonValue(QJsonValue::Null)},{"result",QJsonValue(QJsonValue::Null)}};
-                ops[id] = op; reply(m,op);
+                ops[id] = op; issuedAt[id] = time; reply(m,op);
             } else if (type == "operation_query") {
                 for (auto it = ops.begin(); it != ops.end(); ++it) if (it.value()["operation_id"] == m["operation_id"]) {
                     auto op = it.value();
+                    if (op["state"] == QJsonValue("accepted") && time - issuedAt[it.key()] < operationDelayMs) {
+                        reply(m, op); break;
+                    }
                     if (op["state"] == QJsonValue("accepted")) {
                         const auto command = op["command"].toString(); QJsonArray targets;
                         for (const auto &request : commands) if (request["request_id"] == op["request_id"]) targets = request["params"].toObject()["presets"].toArray();
@@ -194,6 +199,41 @@ private slots:
         QVERIFY(peer.client.startPresets({"arm"})); peer.finish(); QVERIFY(!peer.client.motionAuthorized());
         QCOMPARE(peer.commands.size(),1); QCOMPARE(peer.states["arm"],QString("Initialized")); QCOMPARE(peer.states["gripper"],QString("Fault"));
         QCOMPARE(peer.client.operations()[0].toObject()["state"].toString(),QString("failed"));
+    }
+    void flippersOnlyFailureStopsStartupWithoutEnablingOtherGroups() {
+        PresetPeer peer; peer.begin({"flippers"}); peer.failure = "flippers";
+        QVERIFY(peer.client.startPresets({"flippers"})); peer.finish();
+        for (int i = 0; i < 25; ++i) peer.tick();
+        QVERIFY(!peer.client.motionAuthorized());
+        QVERIFY(!peer.client.diagnostics()["preset_flow_active"].toBool());
+        QCOMPARE(peer.commands.size(), 1);
+        QCOMPARE(peer.commands[0]["command"], QJsonValue("init"));
+        QCOMPARE(peer.commands[0]["params"].toObject()["presets"].toArray(), QJsonArray{"flippers"});
+        QCOMPARE(peer.states["base"], QString("Stopped"));
+        QCOMPARE(peer.states["arm"], QString("Stopped"));
+        QCOMPARE(peer.states["gripper"], QString("Stopped"));
+    }
+    void slowFlipperStartupAllowsEachConfirmedLifecycleStepItsBudget() {
+        PresetPeer peer; peer.operationDelayMs = 25000; peer.begin({"flippers"});
+        const auto started = peer.time;
+        QVERIFY(peer.client.startPresets({"flippers"}));
+        for (int i = 0; i < 5000 && peer.client.diagnostics()["preset_flow_active"].toBool(); ++i) peer.tick();
+        QVERIFY(peer.time - started >= 60000);
+        QVERIFY2(peer.client.motionAuthorized(), qPrintable(QJsonDocument(peer.client.diagnostics()).toJson()));
+        QCOMPARE(peer.commands.size(), 3);
+        QCOMPARE(peer.commands[0]["command"], QJsonValue("init"));
+        QCOMPARE(peer.commands[1]["command"], QJsonValue("enable"));
+        QCOMPARE(peer.commands[2]["command"], QJsonValue("resume"));
+    }
+    void stalledFlipperStepStillTimesOutWithoutReplaying() {
+        PresetPeer peer; peer.operationDelayMs = 90000; peer.begin({"flippers"});
+        QVERIFY(peer.client.startPresets({"flippers"}));
+        for (int i = 0; i < 3200 && peer.client.diagnostics()["preset_flow_active"].toBool(); ++i) peer.tick();
+        QVERIFY(!peer.client.diagnostics()["preset_flow_active"].toBool());
+        QVERIFY(!peer.client.motionAuthorized());
+        QCOMPARE(peer.commands.size(), 1);
+        QCOMPARE(peer.client.operations()[0].toObject()["state"], QJsonValue("result_unknown"));
+        QCOMPARE(peer.client.operations()[0].toObject()["error"], QJsonValue("LOCAL_OPERATION_TIMEOUT"));
     }
     void invalidatedSuccessReconcilesNewEpochWithoutReplay() {
         PresetPeer peer; peer.begin({"base"}); peer.invalidated=true;

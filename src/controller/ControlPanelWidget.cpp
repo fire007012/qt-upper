@@ -52,9 +52,10 @@ ControlPanelWidget::ControlPanelWidget(QWidget *parent)
     buttonLayout->addWidget(m_emergencyButton);
 
     m_gamepadDisplay = new GamepadDisplayWidget(this);
-    m_keyboardHelp = new QLabel(QStringLiteral("键盘控制\n底盘：W/S 前进后退，A/D 转向\n空格：全车急停\n机械臂与摆臂按当前控制域映射。\n先启动运动组，释放按键并归中，再允许遥控。"), this);
+    m_keyboardHelp = new QLabel(this);
     m_keyboardHelp->setObjectName("keyboardControlHelp");
     m_keyboardHelp->setWordWrap(true);
+    setKeyboardContext("vehicle", {}, false);
     m_keyboardKeys = new QLabel(QStringLiteral("当前按键：无"), this);
     m_keyboardKeys->setObjectName("keyboardPressedKeys");
     m_keyboardKeys->setWordWrap(true);
@@ -100,6 +101,28 @@ void ControlPanelWidget::setKeyboardCaptureActive(bool active)
 void ControlPanelWidget::setKeyboardKeys(const QStringList &keys)
 {
     m_keyboardKeys->setText(QStringLiteral("当前按键：%1").arg(keys.isEmpty() ? QStringLiteral("无") : keys.join(", ")));
+}
+
+void ControlPanelWidget::setKeyboardContext(const QString &mode, const QJsonArray &presets, bool presetAware)
+{
+    QStringList lines{QStringLiteral("键盘控制 · %1").arg(mode == "arm" ? QStringLiteral("机械臂") : QStringLiteral("车体 / 摆臂"))};
+    if (!presetAware) lines << QStringLiteral("运动组尚未同步；以下为当前控制域映射，运动仍需启动与授权。");
+    if (mode == "arm") {
+        if (!presetAware || presets.contains("arm")) {
+            lines << QStringLiteral("末端平移：U/O X+/−，A/D Y+/−，W/S Z+/−")
+                  << QStringLiteral("末端旋转：Q/E 绕X+/−，K/I 绕Y+/−，J/L 绕Z+/−")
+                  << QStringLiteral("夹爪：F 打开，H 闭合");
+        } else lines << QStringLiteral("机械臂组未选中；请选组，或切换到车体模式控制摆臂/底盘。");
+    } else {
+        if (!presetAware || presets.contains("base")) lines << QStringLiteral("底盘：W/S 前进后退，A/D 转向");
+        if (!presetAware || presets.contains("flippers")) {
+            lines << QStringLiteral("摆臂：Y/H 左前，U/J 右前，I/K 左后，O/L 右后（正/负方向）");
+        }
+        if (presetAware && !presets.contains("base") && !presets.contains("flippers"))
+            lines << QStringLiteral("底盘/摆臂组未选中；机械臂需切换到机械臂模式。");
+    }
+    lines << QStringLiteral("空格：全车急停") << QStringLiteral("先启动运动组，释放按键并归中，再允许遥控。");
+    m_keyboardHelp->setText(lines.join('\n'));
 }
 
 void ControlPanelWidget::setModeText(const QString &modeText)

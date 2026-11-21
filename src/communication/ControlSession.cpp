@@ -329,6 +329,10 @@ void ControlSession::advancePresets()
             }
             if (action == "halt" && !stoppedPresets(requested)) return;
             m_flowRequest.clear();
+            // Give the next lifecycle step its own budget only after both a
+            // successful operation and a newer matching runtime observation.
+            // Polls/heartbeats and accepted/running responses never extend it.
+            m_flowDeadline = now() + 60000;
         }
     }
 
@@ -727,7 +731,10 @@ void ControlSession::receive(const QJsonObject &message)
     } else if (request.type == "select_presets") {
         valid = !result["epoch"].toString().isEmpty() && result["authorized"] == QJsonValue(false)
             && result["operations_authorized"] == QJsonValue(false) && acceptSelection(result);
-        if (valid) { m_epoch = result["epoch"].toString(); m_permitted = false; revoke("PRESETS_CHANGED"); m_nextFresh = m_nextStatus = 0; }
+        if (valid) {
+            m_epoch = result["epoch"].toString(); m_permitted = false; revoke("PRESETS_CHANGED"); m_nextFresh = m_nextStatus = 0;
+            if (m_flow) m_flowDeadline = now() + 60000;
+        }
     } else if (request.type == "operator_input") {
         valid = QStringList{"neutral","staged"}.contains(result["input_status"].toString());
         if (valid && request.authorizationGeneration == m_authorizationGeneration && request.physicalNeutral && m_physicalNeutral) m_neutralAckAt = now();
