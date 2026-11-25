@@ -10,7 +10,8 @@ set(HOST_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 set(HOST_CONTROL_SOURCES
     ${HOST_ROOT}/src/communication/ControlProtocol.cpp
     ${HOST_ROOT}/src/communication/ControlSession.cpp
-    ${HOST_ROOT}/src/communication/EmergencyChannel.cpp)
+    ${HOST_ROOT}/src/communication/EmergencyChannel.cpp
+    ${HOST_ROOT}/src/communication/TelemetryMessageCodec.cpp)
 add_executable(tcp_client_test
     ${HOST_CONTROL_SOURCES}
     tcp_client_test.cpp

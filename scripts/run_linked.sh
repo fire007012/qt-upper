@@ -1,8 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 host_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-host_config="${HOSTCOMPUTER_MANAGEMENT_CONFIG:-$HOME/robot24-portable/runtime/manager.json}"
-host_binary="${HOSTCOMPUTER_BINARY:-$host_root/build/hostcomputer}"
+default_runtime_dir="${ROBOT24_RUNTIME_DIR:-$HOME/.local/share/robot24}"
+if [[ -n "${HOSTCOMPUTER_MANAGEMENT_CONFIG:-}" ]]; then
+    host_config="$HOSTCOMPUTER_MANAGEMENT_CONFIG"
+elif [[ -f "/etc/robot24/manager.json" ]]; then
+    host_config="/etc/robot24/manager.json"
+else
+    host_config="$default_runtime_dir/manager.json"
+fi
+if [[ -n "${HOSTCOMPUTER_BINARY:-}" ]]; then
+    host_binary="$HOSTCOMPUTER_BINARY"
+elif [[ -x "$host_root/build/hostcomputer" ]]; then
+    host_binary="$host_root/build/hostcomputer"
+else
+    host_binary="$host_root/build-linked/hostcomputer"
+fi
 if [[ "${1:-}" == "--vehicle" ]]; then
     if [[ -z "${2:-}" || "$2" == -* ]]; then
         echo '用法：run_linked.sh --vehicle 下位机IP；用于跨主机连接，运行环境在界面选择。' >&2
@@ -19,7 +32,7 @@ if [[ "${1:-}" == "--vehicle" ]]; then
     exec "$host_binary" "$@"
 fi
 if [[ ! -f "$host_config" ]]; then
-    echo "未找到下位机管理配置：$host_config；请设置 HOSTCOMPUTER_MANAGEMENT_CONFIG。" >&2
+    echo "未找到下位机管理配置：$host_config；请先启动下位机 run_manager.sh 或设置 HOSTCOMPUTER_MANAGEMENT_CONFIG。" >&2
     exit 1
 fi
 if [[ ! -x "$host_binary" ]]; then

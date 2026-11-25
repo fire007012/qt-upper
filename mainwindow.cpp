@@ -4,8 +4,9 @@
 #include "src/communication/ControlProtocol.h"
 #include "src/communication/SharedStructs.h"
 #include "src/controller/MotorRuntimeCarouselWidget.h"
+#include "src/controller/ProtocolLogFormatter.h"
+#include "src/controller/TcpConnectionDialog.h"
 #include <QtGlobal>
-#include <QSpinBox>
 #include <QDockWidget>
 #include <QToolBar>
 #include "src/management/RuntimeManagementWidget.h"
@@ -29,10 +30,8 @@
 #include <QShortcut>
 #include <QKeySequence>
 #include <QSettings>
-#include <QNetworkInterface>
 #include <QFrame>
 #include <QTextEdit>
-#include <QThread>
 #include <QJsonArray>
 #include <QGroupBox>
 #include <QGridLayout>
@@ -42,10 +41,6 @@
 #include <QSplitter>
 #include <QScrollArea>
 #include <QScreen>
-#ifdef Q_OS_WIN
-#include <windows.h>
-#include <shellapi.h>
-#endif
 
 namespace {
 
@@ -1448,324 +1443,11 @@ void MainWindow::applyControlMode(ControlMode mode)
 
 void MainWindow::showTcpConnectionDialog()
 {
-    // 如果已连接，先确认是否断开
-    if (m_controller && m_controller->isTcpConnected()) {
-        auto reply = QMessageBox::question(this, "TCP连接",
-            QString("当前已连接到 %1:%2\n是否断开并重新连接？")
-                .arg(m_controller->getROSHost()).arg(m_controller->getROSPort()),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-        if (reply == QMessageBox::No) {
-            return;
-        }
-        m_controller->disconnectFromROS();
-    }
-
-    QDialog dialog(this);
-    dialog.setWindowTitle("TCP连接到ROS节点");
-    dialog.resize(450, 300);
-
-    QVBoxLayout* layout = new QVBoxLayout(&dialog);
-
-    QLabel* infoLabel = new QLabel("请输入ROS节点(Intel NUC)的IP地址和端口:");
-    layout->addWidget(infoLabel);
-
-    // 从QSettings读取上次使用的IP和端口
-    QSettings settings("HostComputer", "TCPConnection");
-    QString lastHost = settings.value("tcp/host", "192.168.1.123").toString();
-    int lastPort = settings.value("tcp/port", 9090).toInt();
-
-    // IP地址输入
-    QHBoxLayout* ipLayout = new QHBoxLayout();
-    ipLayout->addWidget(new QLabel("IP地址:"));
-    QLineEdit* ipEdit = new QLineEdit(lastHost);
-    ipEdit->setMinimumWidth(200);
-    ipEdit->setPlaceholderText("下位机IP地址");
-    ipLayout->addWidget(ipEdit);
-    layout->addLayout(ipLayout);
-
-    // 端口输入
-    QHBoxLayout* portLayout = new QHBoxLayout();
-    portLayout->addWidget(new QLabel("端口:"));
-    QSpinBox* portSpin = new QSpinBox();
-    portSpin->setRange(1, 65535);
-    portSpin->setValue(lastPort);
-    portSpin->setMinimumWidth(200);
-    portLayout->addWidget(portSpin);
-    layout->addLayout(portLayout);
-
-    auto *robotEdit = new QLineEdit(settings.value("tcp/robot_id", "robot24").toString(), &dialog);
-    robotEdit->setPlaceholderText(QStringLiteral("须与下位机robot_id精确一致"));
-    layout->addWidget(new QLabel(QStringLiteral("机器人身份（控制v2）"), &dialog)); layout->addWidget(robotEdit);
-
-    // ====== 网络配置区域 ======
-    QFrame* separator = new QFrame();
-    separator->setFrameShape(QFrame::HLine);
-    separator->setFrameShadow(QFrame::Sunken);
-    layout->addWidget(separator);
-
-    QLabel* netConfigTitle = new QLabel("网络配置");
-    netConfigTitle->setStyleSheet("font-weight: bold; color: #555;");
-    layout->addWidget(netConfigTitle);
-
-    QLabel* networkStatusLabel = new QLabel("正在检测网卡...");
-    networkStatusLabel->setWordWrap(true);
-    layout->addWidget(networkStatusLabel);
-
-    QPushButton* autoConfigBtn = new QPushButton("自动配置网络");
-    autoConfigBtn->setToolTip("根据目标NUC的IP，自动为本机网卡分配同网段的不冲突IP");
-    autoConfigBtn->setEnabled(false);
-    layout->addWidget(autoConfigBtn);
-
-    // --- 检测有线网卡的 lambda ---
-    struct EthernetInfo {
-        QString adapterName;  // Windows网卡名称（用于netsh）
-        QString currentIp;
-        bool found = false;
-    };
-
-    auto detectEthernetAdapter = [](EthernetInfo &info) {
-        info.found = false;
-        info.adapterName.clear();
-        info.currentIp.clear();
-
-        // 用于排除虚拟网卡的关键词
-        const QStringList excludeKeywords = {
-            "vmware", "virtual", "bluetooth", "loopback",
-            "vethernet", "hyper-v", "vpn", "tunnel",
-            "wsl", "docker", "vbox"
-        };
-
-        const auto interfaces = QNetworkInterface::allInterfaces();
-        for (const QNetworkInterface &iface : interfaces) {
-            // 必须是以太网类型、已启用且正在运行
-            if (iface.type() != QNetworkInterface::Ethernet)
-                continue;
-            if (!(iface.flags() & QNetworkInterface::IsUp))
-                continue;
-            if (iface.flags() & QNetworkInterface::IsLoopBack)
-                continue;
-
-            // 排除虚拟网卡
-            QString nameLower = iface.humanReadableName().toLower();
-            bool isVirtual = false;
-            for (const QString &kw : excludeKeywords) {
-                if (nameLower.contains(kw)) {
-                    isVirtual = true;
-                    break;
-                }
-            }
-            if (isVirtual) continue;
-
-            // 找到有线网卡
-            info.found = true;
-            info.adapterName = iface.humanReadableName();
-
-            // 获取IPv4地址
-            const auto entries = iface.addressEntries();
-            for (const QNetworkAddressEntry &entry : entries) {
-                if (entry.ip().protocol() == QAbstractSocket::IPv4Protocol
-                    && !entry.ip().isLoopback()) {
-                    info.currentIp = entry.ip().toString();
-                    break;
-                }
-            }
-            break;  // 取第一个匹配的有线网卡
-        }
-    };
-
-    // --- 根据目标NUC IP计算本机同网段不冲突IP ---
-    auto calcLocalIp = [](const QString &nucIp) -> QString {
-        QStringList parts = nucIp.split('.');
-        if (parts.size() != 4) return QString();
-        int lastOctet = parts[3].toInt();
-        // 从200开始找一个不冲突的末位
-        for (int candidate : {200, 201, 202, 210, 220, 250}) {
-            if (candidate != lastOctet) {
-                return QString("%1.%2.%3.%4").arg(parts[0], parts[1], parts[2]).arg(candidate);
-            }
-        }
-        return QString();
-    };
-
-    // --- 根据目标IP提取网段前缀（如 "192.168.1."）---
-    auto getSubnetPrefix = [](const QString &ip) -> QString {
-        QStringList parts = ip.split('.');
-        if (parts.size() != 4) return QString();
-        return QString("%1.%2.%3.").arg(parts[0], parts[1], parts[2]);
-    };
-
-    // --- 刷新网卡状态的 lambda ---
-    auto refreshNetworkStatus = [&](const EthernetInfo &info) {
-        if (!info.found) {
-            networkStatusLabel->setText("未检测到有线网卡");
-            networkStatusLabel->setStyleSheet("color: red;");
-            autoConfigBtn->setEnabled(false);
-            return;
-        }
-
-        QString nucIp = ipEdit->text().trimmed();
-        QString subnetPrefix = getSubnetPrefix(nucIp);
-
-        // 判断本机IP是否已在目标NUC同网段，且不与NUC冲突
-        bool isReady = !subnetPrefix.isEmpty()
-                       && info.currentIp.startsWith(subnetPrefix)
-                       && info.currentIp != nucIp;
-
-        QString statusText = QString("有线网卡: %1").arg(info.adapterName);
-        if (info.currentIp.isEmpty()) {
-            statusText += " (未分配IP)";
-        } else {
-            statusText += QString(" (%1)").arg(info.currentIp);
-        }
-
-        if (isReady) {
-            statusText += "  ✓ 已就绪";
-            networkStatusLabel->setStyleSheet("color: green;");
-            autoConfigBtn->setEnabled(false);
-            autoConfigBtn->setText("网络已就绪");
-        } else {
-            statusText += "  ✗ 需要配置";
-            networkStatusLabel->setStyleSheet("color: #CC6600;");
-            autoConfigBtn->setEnabled(true);
-            autoConfigBtn->setText("自动配置网络");
-        }
-        networkStatusLabel->setText(statusText);
-    };
-
-    // 初始检测
-    EthernetInfo ethInfo;
-    detectEthernetAdapter(ethInfo);
-    refreshNetworkStatus(ethInfo);
-
-    // IP输入框变化时重新刷新网卡就绪状态
-    connect(ipEdit, &QLineEdit::textChanged, &dialog, [&]() {
-        refreshNetworkStatus(ethInfo);
-    });
-
-    // --- 自动配置按钮点击逻辑 ---
-    connect(autoConfigBtn, &QPushButton::clicked, &dialog, [&]() {
-        QString nucIp = ipEdit->text().trimmed();
-        QString localIp = calcLocalIp(nucIp);
-
-        if (localIp.isEmpty()) {
-            QMessageBox::warning(&dialog, "配置失败",
-                "请先在上方填入有效的NUC IP地址（如 192.168.1.50）");
-            return;
-        }
-
-        QString subnetMask = "255.255.255.0";
-
-        auto confirmReply = QMessageBox::question(&dialog, "确认网络配置",
-            QString("将对网卡 \"%1\" 执行以下配置:\n\n"
-                    "  本机IP: %2\n"
-                    "  子网掩码: %3\n"
-                    "  目标NUC: %4\n\n"
-                    "此操作需要管理员权限（UAC弹窗），是否继续？")
-                .arg(ethInfo.adapterName, localIp, subnetMask, nucIp),
-            QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-
-        if (confirmReply != QMessageBox::Yes) {
-            return;
-        }
-
-#ifdef Q_OS_WIN
-        // 构建 netsh 命令参数
-        QString netshArgs = QString("interface ip set address name=\"%1\" static %2 %3")
-                                .arg(ethInfo.adapterName, localIp, subnetMask);
-
-        // 使用 ShellExecuteExW 提权执行
-        SHELLEXECUTEINFOW sei = {};
-        sei.cbSize = sizeof(sei);
-        sei.fMask = SEE_MASK_NOCLOSEPROCESS;
-        sei.hwnd = reinterpret_cast<HWND>(dialog.winId());
-        sei.lpVerb = L"runas";
-        sei.lpFile = L"netsh";
-        sei.lpParameters = reinterpret_cast<LPCWSTR>(netshArgs.utf16());
-        sei.nShow = SW_HIDE;
-
-        autoConfigBtn->setEnabled(false);
-        autoConfigBtn->setText("正在配置...");
-        networkStatusLabel->setText("等待UAC授权...");
-        networkStatusLabel->setStyleSheet("color: #0066CC;");
-        QApplication::processEvents();
-
-        if (ShellExecuteExW(&sei)) {
-            // 等待 netsh 进程执行完毕（最多10秒）
-            if (sei.hProcess) {
-                WaitForSingleObject(sei.hProcess, 10000);
-                CloseHandle(sei.hProcess);
-            }
-
-            // 等一下让系统应用网络设置
-            QThread::msleep(1500);
-            QApplication::processEvents();
-
-            // 重新检测网卡状态
-            detectEthernetAdapter(ethInfo);
-            refreshNetworkStatus(ethInfo);
-
-            if (ethInfo.currentIp == localIp) {
-                QMessageBox::information(&dialog, "配置成功",
-                    QString("网卡 \"%1\" 已成功配置为:\n"
-                            "IP: %2\n"
-                            "子网掩码: %3")
-                        .arg(ethInfo.adapterName, localIp, subnetMask));
-                addCommand(QString("[网络] 有线网卡已配置为 %1").arg(localIp));
-            } else {
-                // 可能IP变了但不是精确匹配，再刷新看看
-                QMessageBox::warning(&dialog, "配置结果",
-                    QString("netsh命令已执行，当前检测到IP: %1\n"
-                            "如果IP未生效，请稍等几秒后重新打开此对话框。")
-                        .arg(ethInfo.currentIp.isEmpty() ? "未分配" : ethInfo.currentIp));
-            }
-        } else {
-            DWORD err = GetLastError();
-            if (err == ERROR_CANCELLED) {
-                networkStatusLabel->setText(QString("有线网卡: %1 (%2)  ✗ UAC已取消")
-                    .arg(ethInfo.adapterName, ethInfo.currentIp.isEmpty() ? "未分配IP" : ethInfo.currentIp));
-                networkStatusLabel->setStyleSheet("color: #CC6600;");
-            } else {
-                networkStatusLabel->setText(QString("配置失败 (错误码: %1)").arg(err));
-                networkStatusLabel->setStyleSheet("color: red;");
-            }
-            autoConfigBtn->setEnabled(true);
-            autoConfigBtn->setText("自动配置网络");
-        }
-#else
-        QMessageBox::information(&dialog, "提示", "此功能仅支持Windows系统");
-#endif
-    });
-
-    // ====== 按钮 ======
-    QDialogButtonBox* buttonBox = new QDialogButtonBox(
-        QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    buttonBox->button(QDialogButtonBox::Ok)->setText("连接");
-    buttonBox->button(QDialogButtonBox::Cancel)->setText("取消");
-    layout->addWidget(buttonBox);
-
-    connect(buttonBox, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
-    connect(buttonBox, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-
-    if (dialog.exec() == QDialog::Accepted) {
-        QString host = ipEdit->text().trimmed();
-        quint16 port = static_cast<quint16>(portSpin->value());
-
-        if (host.isEmpty()) {
-            addError("[TCP] IP地址不能为空");
-            return;
-        }
-
-        addCommand(QString("[TCP] 正在连接到 %1:%2 ...").arg(host).arg(port));
-        bool started = m_controller ? m_controller->connectToROS(host, port, robotEdit->text().trimmed()) : false;
-        if (started) {
-            // 已成功发起连接尝试；最终连接结果由信号回调
-            settings.setValue("tcp/host", host);
-            settings.setValue("tcp/port", port);
-            settings.setValue("tcp/robot_id", robotEdit->text().trimmed());
-        } else {
-            addError(QString("[TCP] 发起连接失败: %1:%2").arg(host).arg(port));
-        }
-    }
+    TcpConnectionDialog::showDialog(
+        this,
+        m_controller,
+        [this](const QString &msg) { addCommand(msg); },
+        [this](const QString &err) { addError(err); });
 }
 
 
@@ -1877,138 +1559,15 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
                  status["emergency_active"].toBool() ? QStringLiteral("锁存") : QStringLiteral("已清除")));
         return;
     }
+
     // Full operation/notice records are persisted by the operator journal.
     if (type == "control_operation" || type == "control_notice") return;
-    if (type == "emergency_result") {
-        const auto text = message["ok"].toBool() ? QStringLiteral("[急停] 桥接已锁存并发起停止；物理停止仍需独立确认。")
-            : QStringLiteral("[急停] 请求结果未知：%1；请使用独立停止保障。").arg(message["error"].toString());
-        if (message["ok"].toBool()) addCommand(text); else addError(text);
-        return;
-    }
-    if (type == "ack_pending") {
-        addCommand(QString("[ACK] waiting %1 seq=%2 timeout=%3ms")
-                   .arg(message["ack_type"].toString("unknown"))
-                   .arg(message["seq"].toVariant().toLongLong())
-                   .arg(message["timeout_ms"].toInt()));
-        return;
-    }
-
-    if (type == "connection_recovery") {
-        addCommand(QString("[连接] 将在 %1ms 后自动重试").arg(message["retry_in_ms"].toInt()));
-        return;
-    }
-
-    if (type == "ack") {
-        const QString ackType = message["ack_type"].toString("unknown");
-        const qint64 seq = message["seq"].toVariant().toLongLong();
-        const bool ok = message["ok"].toBool(false);
-        const int code = message["code"].toInt(-1);
-        const QString text = message["message"].toString();
-        const QString line = QString("[ACK] %1 seq=%2 %3 code=%4 elapsed=%5ms %6")
-                                 .arg(ackType)
-                                 .arg(seq)
-                                 .arg(ok ? "OK" : "FAIL")
-                                 .arg(code)
-                                 .arg(message["elapsed_ms"].toVariant().toLongLong())
-                                 .arg(text);
-        if (ok) {
-            addCommand(line);
-        } else {
-            addError(line);
-        }
-        return;
-    }
-
-    if (type == "ack_timeout" || type == "ack_disconnected" || type == "ack_superseded") {
-        addError(QString("[ACK] %1 %2 seq=%3 elapsed=%4ms")
-                 .arg(type)
-                 .arg(message["ack_type"].toString("unknown"))
-                 .arg(message["seq"].toVariant().toLongLong())
-                 .arg(message["elapsed_ms"].toVariant().toLongLong()));
-        return;
-    }
-
-    if (type == "ack_unmatched") {
-        addError(QString("[ACK] UNMATCHED %1 seq=%2 code=%3 %4")
-                 .arg(message["ack_type"].toString("unknown"))
-                 .arg(message["seq"].toVariant().toLongLong())
-                 .arg(message["code"].toInt(-1))
-                 .arg(message["message"].toString()));
-        return;
-    }
-
-    if (type == "ack_mismatch") {
-        addError(QString("[ACK] MISMATCH actual=%1 expected=%2 seq=%3 elapsed=%4ms code=%5 %6")
-                 .arg(message["ack_type"].toString("unknown"))
-                 .arg(message["expected_ack_type"].toString("unknown"))
-                 .arg(message["seq"].toVariant().toLongLong())
-                 .arg(message["elapsed_ms"].toVariant().toLongLong())
-                 .arg(message["code"].toInt(-1))
-                 .arg(message["message"].toString()));
-        return;
-    }
-
-    if (type == "service_call_result") {
-        const bool ok = message["ok"].toBool(false);
-        const QString line = QString("[ROS service] %1 %2 seq=%3 code=%4 %5ms %6")
-                                 .arg(message["command"].toString("unknown"))
-                                 .arg(ok ? "OK" : "FAIL")
-                                 .arg(message["seq"].toVariant().toLongLong())
-                                 .arg(message["code"].toInt(-1))
-                                 .arg(message["duration_ms"].toVariant().toLongLong())
-                                 .arg(message["message"].toString());
-        const QString detail = QString("%1 service=%2 request=%3")
-                                   .arg(line)
-                                   .arg(message["service"].toString("unknown"))
-                                   .arg(message["request_type"].toString("unknown"));
-        if (ok) {
-            addCommand(detail);
-        } else {
-            addError(detail);
-        }
-        return;
-    }
-
-    if (type == "emergency_state") {
-        const bool active = message["active"].toBool(false);
-        const QString source = message["source"].toString();
-        const QString text = message["message"].toString();
-        const QString line = QString("[急停状态] %1 source=%2 %3")
-                                 .arg(active ? "ACTIVE" : "CLEAR")
-                                 .arg(source)
-                                 .arg(text);
-        addCommand(line);
-        return;
-    }
-
-    if (type == "hello") {
-        addCommand(QString("[Bridge] hello name=%1 version=%2 robot=%3")
-                   .arg(message["bridge_name"].toString("unknown"))
-                   .arg(message["bridge_version"].toString("unknown"))
-                   .arg(message["robot_id"].toString("unknown")));
-        return;
-    }
-
-    if (type == "capabilities") {
-        addCommand(QString("[Bridge] capabilities supports=%1 max_frame=%2")
-                   .arg(message["supports"].toArray().size())
-                   .arg(message["max_frame_bytes"].toVariant().toLongLong()));
-        return;
-    }
 
     if (type == "arm_named_targets"
         || type == "moveit_named_targets"
         || type == "moveit_named_poses"
         || type == "arm_action_list") {
         updateArmNamedTargets(message);
-        return;
-    }
-
-    if (type == "sync_request_sent") {
-        addCommand(QString("[同步] request reason=%1 sync=%2 cameras=%3")
-                   .arg(message["reason"].toString("unknown"))
-                   .arg(message["sync_sent"].toBool(false) ? "sent" : "failed")
-                   .arg(message["camera_list_sent"].toBool(false) ? "sent" : "failed"));
         return;
     }
 
@@ -2028,28 +1587,6 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
                    .arg(motor["enabled"].toBool(false) ? "enabled" : "disabled")
                    .arg(lastError["code"].toInt(0))
                    .arg(lastError["message"].toString()));
-        return;
-    }
-
-    if (type == "camera_list_response") {
-        addCommand(QString("[同步] camera_list_response seq=%1 cameras=%2")
-                   .arg(message["seq"].toVariant().toLongLong())
-                   .arg(message["cameras"].toArray().size()));
-        return;
-    }
-
-    if (type == "param_response") {
-        addCommand(QString("[参数] %1=%2")
-                   .arg(message["name"].toString("unknown"))
-                   .arg(message["value"].toVariant().toString()));
-        return;
-    }
-
-    if (type == "protocol_error") {
-        addError(QString("[协议错误] seq=%1 code=%2 %3")
-                 .arg(message["seq"].toVariant().toLongLong())
-                 .arg(message["code"].toInt(-1))
-                 .arg(message["message"].toString()));
         return;
     }
 
@@ -2082,6 +1619,14 @@ void MainWindow::onProtocolMessageReceived(const QJsonObject &message)
         }
         addCommand(QString("[状态] system_status seq=%1")
                    .arg(message["seq"].toVariant().toLongLong()));
+        return;
+    }
+
+    const auto formatted = formatProtocolLogMessage(message);
+    if (formatted.kind == FormattedProtocolLog::Kind::Command) {
+        addCommand(formatted.text);
+    } else if (formatted.kind == FormattedProtocolLog::Kind::Error) {
+        addError(formatted.text);
     }
 }
 

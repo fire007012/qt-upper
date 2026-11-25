@@ -25,12 +25,12 @@ ctest --test-dir /tmp/hostcomputer-communication-tests --output-on-failure
 本机 Qt6.12 与系统默认 CMake 3.22 不匹配，使用 Qt 随附的 CMake：
 
 ```sh
-/home/fire/Qt/Tools/CMake/bin/cmake -S tests/communication \
+$HOME/Qt/Tools/CMake/bin/cmake -S tests/communication \
   -B /tmp/hostcomputer-communication-qt6 \
-  -DCMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 \
+  -DCMAKE_PREFIX_PATH=$HOME/Qt/6.12.0/gcc_64 \
   -DCMAKE_BUILD_TYPE=Debug -DHOST_BUILD_WIDGET_TESTS=ON
-/home/fire/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-communication-qt6 -j 4
-/home/fire/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-communication-qt6 \
+$HOME/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-communication-qt6 -j 4
+$HOME/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-communication-qt6 \
   --output-on-failure -j 3
 ```
 
@@ -53,8 +53,8 @@ python3 -B tests/communication/manager_reference_integration.py \
 `scripts/run_all_tests.sh` 依次运行完整 Qt 构建、这里的独立 Qt 回归及 `protocol_smoke_test.py`。协议冒烟只启动 `scripts/mock_robot_server.py`，该 mock 不导入 ROS、不宣称支持管理协议或完整安全能力。旧桥接/视频回环脚本已移至 `archive/ros1/scripts/`，不再由当前入口运行。
 
 ```sh
-CMAKE_BIN=/home/fire/Qt/Tools/CMake/bin/cmake \
-CMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 \
+CMAKE_BIN=$HOME/Qt/Tools/CMake/bin/cmake \
+CMAKE_PREFIX_PATH=$HOME/Qt/6.12.0/gcc_64 \
 HOST_BUILD_WIDGET_TESTS=ON bash scripts/run_all_tests.sh
 ```
 
@@ -102,7 +102,7 @@ python3 -B tests/communication/control_reference_integration.py \
 
 这些契约只验证模拟输出。物理断网、真实ROS2/设备、跨机器校时及完整视频隔离必须另行验收。UI进程8秒存活也仅证明创建及事件循环，不证明Quick3D、手柄或视频。
 
-当前同级目录布局的联动步骤见 [当前启动说明](../../docs/上下位机启动与控制说明.md)。只读契约的参考路径应显式使用 `/home/fire/ros2_ws_car/src/...`，不要求将下位机复制进上位机仓库。ROS2 临时接口覆盖层现在同时生成 `SetProfile`、`GroupOperation` 和 `ExecuteArmGoal`，支持已协商的分组控制；缺失分组服务不能当作 lifecycle 服务已通过。视频专项新增 `video_widget_lifecycle`，直接验证生产播放器销毁及显式停止后销毁，覆盖子解码器析构发出停止信号的情况。
+当前同级目录布局的联动步骤见 [当前启动说明](../../docs/上下位机启动与控制说明.md)。只读契约的参考路径应显式使用 `$HOME/ros2_ws_car/src/...`，不要求将下位机复制进上位机仓库。ROS2 临时接口覆盖层现在同时生成 `SetProfile`、`GroupOperation` 和 `ExecuteArmGoal`，支持已协商的分组控制；缺失分组服务不能当作 lifecycle 服务已通过。视频专项新增 `video_widget_lifecycle`，直接验证生产播放器销毁及显式停止后销毁，覆盖子解码器析构发出停止信号的情况。
 
 本地发布证据：`python3 -B scripts/check_host_release.py --binary /tmp/hostcomputer-qt6-build/hostcomputer --output /tmp/hostcomputer-release-check.json`。脚本检查构建标识/Qt6、本机动态依赖和FFmpeg并记录二进制SHA256，不将本机环境检查等同干净机器/Windows发布验收。
 
@@ -142,10 +142,10 @@ QT_QPA_PLATFORM=offscreen ctest --test-dir /tmp/hostcomputer-communication-qt5-f
 `installed_robot_probe` 不注册默认 CTest。它使用生产 Qt 管理/控制层启动真实 ROS2 Mock 整车，经真实桥接操作预设、换档、急停及显式解除，验证操作终态和实际读回，再停止软件。Python runner 在域 197 监听模拟测量轮速，使用独立临时端口、令牌和 journal，拒绝 hardware 档案。必须先完成完整安装及本地 Mock 配置准备，不能使用仅接口的测试 overlay。
 
 ```bash
-source /home/fire/ros2_ws_car/linked-install/setup.bash
+source $HOME/ros2_ws_car/linked-install/setup.bash
 python3 -B tests/communication/installed_reference_integration.py \
-  --config /home/fire/ros2_ws_car/linked-runtime/manager.json \
-  --manager /home/fire/ros2_ws_car/src/robot_manager/manager.py \
+  --config $HOME/ros2_ws_car/linked-runtime/manager.json \
+  --manager $HOME/ros2_ws_car/src/robot_manager/manager.py \
   --probe /tmp/host-link-tests/installed_robot_probe \
   --output-dir /tmp/host-link-installed-new-run
 ```
@@ -160,10 +160,10 @@ python3 -B tests/communication/installed_reference_integration.py \
 完整窗口布局回归单独按项目 Qt6 环境构建，不需要 ROS 或车辆：
 
 ```bash
-/home/fire/Qt/Tools/CMake/bin/cmake -S . -B /tmp/hostcomputer-gui-tests \
-  -DCMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 -DHOST_BUILD_GUI_TESTS=ON
-/home/fire/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-gui-tests -j 4
-/home/fire/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-gui-tests --output-on-failure
+$HOME/Qt/Tools/CMake/bin/cmake -S . -B /tmp/hostcomputer-gui-tests \
+  -DCMAKE_PREFIX_PATH=$HOME/Qt/6.12.0/gcc_64 -DHOST_BUILD_GUI_TESTS=ON
+$HOME/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-gui-tests -j 4
+$HOME/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-gui-tests --output-on-failure
 ```
 
 两组完整窗口测试覆盖输入切换、按键反馈、900/1280/1366 像素宽度、侧栏/管理 dock 滚动访问及 150% 缩放。使用隔离的设置和日志目录，不连接服务、不授权或启动运动。软件离屏后端不验证 Quick3D 实际渲染或实机输出。

@@ -28,6 +28,8 @@ set(COMMUNICATION_SOURCES
     # 机器人 TCP/JSON客户端
     RobotTcpClient.cpp
     RobotTcpClient.h
+    TelemetryMessageCodec.cpp
+    TelemetryMessageCodec.h
 )
 
 # 构建静态库

@@ -93,8 +93,10 @@ else()
 endif()
 
 add_subdirectory(src/utils)          # 工具层（日志、错误处理）
-add_subdirectory(src/controller)     # 业务逻辑层
-add_subdirectory(src/communication)  # 通信层（CAN/TCP/Serial）
+add_subdirectory(src/communication)  # 通信层（TCP/JSON）
+add_subdirectory(src/state)          # 状态存储层
+add_subdirectory(src/management)     # 管理与配置层（核心服务 + 管理界面）
+add_subdirectory(src/controller)     # 业务逻辑与控制视图层
 # add_subdirectory(resources)        # 资源(qrc) - 暂时注释掉，等有资源文件时再启用
 
 # ============================================

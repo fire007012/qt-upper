@@ -1,6 +1,6 @@
 # 当前版本文档
 
-更新：2026-11-20。适用上位机构建 `host-ros2-v2-field-1`；管理协议 v1、控制协议 v2、配置事务 v1。构建与能力边界以 [兼容声明](../deploy/compatibility.json) 和连接后的服务响应为准。
+更新：2026-11-25。适用上位机构建 `host-ros2-v2-field-1`；管理协议 v1、控制协议 v2、配置事务 v1。构建与能力边界以 [兼容声明](../deploy/compatibility.json) 和连接后的服务响应为准。
 
 ## 使用与排查
 
@@ -26,6 +26,6 @@
 | 补齐实机环境与各组 can0 启动 | [下位机协作提示词](下位机实机档案与can0分组启动协作提示词.md) |
 | 尚未支持的设备参数、视觉检测接口 | [设备参数要求](下位机设备参数维护接口要求.md)、[视觉监测要求](视觉监测管理接口要求.md) |
 
-`ros2_ws_car/` 是只读参考；下位机配置、ROS2、管理服务与部署改动由下位机端在独立授权工作区实施。日常运行部署为 `~/robot24-portable`，Qt 默认读取其 runtime/manager.json；源码工作区仅保留 build、install、log、src，旧联动目录和兼容入口已删除。当前部署提供 mock/hardware 档案，实际可用范围以预检为准，CAN 接口按现场配置核验。mock、安装栈模拟联动、软件停止回执均不代替实机验收。
+`ros2_ws_car/`（上位机仓库内的副本）是只读参考；下位机配置、ROS2、管理服务与部署改动由下位机端在独立工作区实施。当前已去掉 `robot24-portable` 中间目录：下位机终端入口为 `bash ~/ros2_ws_car/src/tools/run_manager.sh`（配置位于 `~/.local/share/robot24/manager.json`，目标机安装系统自启后位于 `/etc/robot24/manager.json`），Qt 通过 `bash ~/hostcomputer/scripts/run_linked.sh` 自动按优先级发现配置。当前部署提供 mock/hardware 档案，实际可用范围以预检为准，CAN 接口按现场配置核验。mock、安装栈模拟联动、软件停止回执均不代替实机验收。
 
 [开发归档](开发归档/README.md) 保存旧计划、协议交接稿和历史验证记录；不作为当前启动入口。已删除的重复说明及归档清单也在该索引列出。

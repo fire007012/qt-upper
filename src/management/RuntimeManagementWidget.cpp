@@ -339,6 +339,8 @@ RuntimeManagementWidget::RuntimeManagementWidget(QWidget *parent) : QWidget(pare
         s.remove(scope + "/pending_request"); s.remove(scope + "/pending_method");
     });
     connect(&m_service, &RuntimeService::snapshotReceived, this, [this](const QJsonObject &snapshot) {
+        if (snapshot["recovery_required"].toBool() || snapshot["software_state"] == QJsonValue("failed"))
+            m_startWhenReady = false;
         record("management_state", QJsonObject{{"software_state",snapshot["software_state"]},
             {"recovery_required",snapshot["recovery_required"]},{"safety",snapshot["safety"]},
             {"profile_id",snapshot["profile_id"]},{"modules",snapshot["modules"]}}, true);

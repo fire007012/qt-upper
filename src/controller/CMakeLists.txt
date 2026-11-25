@@ -12,20 +12,8 @@
 # ============================================
 
 set(CONTROLLER_SOURCES
-    ../state/RobotStateStore.cpp
-    ../state/RobotStateStore.h
     ../diagnostics/DiagnosticsWidget.cpp
     ../diagnostics/DiagnosticsWidget.h
-    ../management/ConfigurationService.cpp
-    ../management/ConfigurationService.h
-    ../management/ConfigurationWidget.cpp
-    ../management/ConfigurationWidget.h
-    ../management/RuntimeService.cpp
-    ../management/RuntimeService.h
-    ../management/RuntimeManagementWidget.cpp
-    ../management/RuntimeManagementWidget.h
-    ../management/RuntimeJournal.cpp
-    ../management/RuntimeJournal.h
     controller.cpp
     controller.h
     CameraGridWidget.cpp
@@ -56,6 +44,10 @@ set(CONTROLLER_SOURCES
     RobotViewModel.h
     TelemetryPanelWidget.cpp
     TelemetryPanelWidget.h
+    TcpConnectionDialog.cpp
+    TcpConnectionDialog.h
+    ProtocolLogFormatter.cpp
+    ProtocolLogFormatter.h
 )
 
 # 创建静态库
@@ -74,6 +66,8 @@ target_link_libraries(controller_layer PUBLIC
 
     # 层级依赖
     communication_layer
+    state_layer
+    management_ui
     utils_layer
 
     # OpenCV 依赖（如果需要）

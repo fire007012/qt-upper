@@ -1,6 +1,6 @@
 # Qt 运行管理与构建
 
-更新：2026-11-20。管理协议 v1，默认 TCP `9091`；控制使用独立 v2 连接。运行配置为 `~/robot24-portable/runtime/manager.json`，下位机入口为 `bash ~/robot24-portable/run_manager.sh`；旧 linked-* 目录和兼容入口已移除。日常入口见 [启动与控制](上下位机启动与控制说明.md)，接口依据为下位机 [管理协议39](../ros2_ws_car/src/docs/archive/qt/39_下位机管理协议与Qt对接.md)。
+更新：2026-11-25。管理协议 v1，默认 TCP `9091`；控制使用独立 v2 连接。下位机终端开发运行配置为 `~/.local/share/robot24/manager.json`，入口为 `bash ~/ros2_ws_car/src/tools/run_manager.sh`；目标机一键自启部署后使用 `/etc/robot24/manager.json`（`~/ros2_ws_car/src/tools/install_autostart.sh`）。日常入口见 [启动与控制](上下位机启动与控制说明.md)，接口依据为下位机 [管理协议39](../ros2_ws_car/src/docs/archive/qt/39_下位机管理协议与Qt对接.md)。
 
 ## 连接与启停
 
@@ -51,9 +51,9 @@
 完整应用要求 Qt6（CMake 中最低 6.5）及 Quick/QML/QuickWidgets/Quick3D/OpenGL；当前使用 Qt6.12.0。该 Qt 要求 CMake ≥ 3.25，本机系统 CMake 3.22.1 不够，使用 Qt 附带版本：
 
 ```bash
-/home/fire/Qt/Tools/CMake/bin/cmake -S . -B /tmp/hostcomputer-qt6-build \
-  -DCMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 -DCMAKE_BUILD_TYPE=Debug
-/home/fire/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-qt6-build -j 4
+$HOME/Qt/Tools/CMake/bin/cmake -S . -B /tmp/hostcomputer-qt6-build \
+  -DCMAKE_PREFIX_PATH=$HOME/Qt/6.12.0/gcc_64 -DCMAKE_BUILD_TYPE=Debug
+$HOME/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-qt6-build -j 4
 /tmp/hostcomputer-qt6-build/hostcomputer
 ```
 

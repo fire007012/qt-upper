@@ -120,12 +120,23 @@ def connection_card(config_path, hide_token=False, local=False):
     return 0
 
 
+def default_config_path():
+    env_path = os.environ.get("HOSTCOMPUTER_MANAGEMENT_CONFIG")
+    if env_path:
+        return Path(env_path)
+    system_path = Path("/etc/robot24/manager.json")
+    if system_path.is_file():
+        return system_path
+    runtime_dir = os.environ.get("ROBOT24_RUNTIME_DIR")
+    base = Path(runtime_dir) if runtime_dir else (Path.home() / ".local/share/robot24")
+    return base / "manager.json"
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="只读显示下位机管理服务的上位机连接参数；不连接或启动服务。")
     parser.add_argument("--config", type=Path,
-                        default=Path(os.environ.get("HOSTCOMPUTER_MANAGEMENT_CONFIG")
-                                     or str(Path.home() / "robot24-portable/runtime/manager.json")),
-                        help="与 run_manager.sh 实际使用的管理 JSON 相同")
+                        default=default_config_path(),
+                        help="与 run_manager.sh 或系统服务实际使用的管理 JSON 相同")
     parser.add_argument("--hide-token", action="store_true", help="隐藏令牌，便于分享排查输出")
     parser.add_argument("--local", action="store_true", help="同机连接；监听允许时显示 127.0.0.1")
     args = parser.parse_args(argv)

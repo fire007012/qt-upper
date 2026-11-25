@@ -9,22 +9,22 @@ Qt 通过 TCP/JSON 连接下位机 ROS2 `host_bridge`（默认9090）；独立�
 - [视频联调](docs/ROS2视频联调说明.md) / [手柄键盘](docs/手柄键盘控制说明.md)
 - [当前计划与职责](docs/上位机ROS2适配与可靠性重构计划.md) / [独立通信测试](tests/communication/README.md)
 
-日常联动使用独立部署，不依赖源码工作区的构建目录：
+日常联动直接由下位机 `~/ros2_ws_car` 启动，不再依赖 `robot24-portable` 中间部署目录：
 
 ```bash
-# 终端 1：下位机管理服务
-bash ~/robot24-portable/run_manager.sh
+# 终端 1：下位机管理服务（内置崩溃退避自恢复）
+bash ~/ros2_ws_car/src/tools/run_manager.sh
 # 终端 2：上位机
 bash ~/hostcomputer/scripts/run_linked.sh
 ```
 
-上位机默认读取 `~/robot24-portable/runtime/manager.json`。源码工作区 `~/ros2_ws_car` 只保留 build、install、log、src；旧 linked-* 目录、兼容链接及旧部署备份已删除。详细操作见 [启动与控制](docs/上下位机启动与控制说明.md)。
+上位机按优先级自动读取 `HOSTCOMPUTER_MANAGEMENT_CONFIG` → `/etc/robot24/manager.json`（目标机 systemd 自启）→ `~/.local/share/robot24/manager.json`（终端开发运行态）。目标下位机开机自启安装入口为 `~/ros2_ws_car/src/tools/install_autostart.sh`。详细操作见 [启动与控制](docs/上下位机启动与控制说明.md)。
 
 本机 Qt6.12 环境的一次性构建与回归入口：
 
 ```sh
-CMAKE_BIN=/home/fire/Qt/Tools/CMake/bin/cmake \
-CMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 \
+CMAKE_BIN=$HOME/Qt/Tools/CMake/bin/cmake \
+CMAKE_PREFIX_PATH=$HOME/Qt/6.12.0/gcc_64 \
 HOST_BUILD_WIDGET_TESTS=ON bash scripts/run_all_tests.sh
 ```
 

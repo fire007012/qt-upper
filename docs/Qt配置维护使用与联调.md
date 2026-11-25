@@ -30,12 +30,12 @@ result_unknown / MANAGER_RESTART / ROLLBACK_UNKNOWN 不显示成功；以当前 
 独立回归不需要 ROS 或 Widgets；界面回归可选开启。Qt6.12 使用随附的新版 CMake：
 
 ```sh
-/home/fire/Qt/Tools/CMake/bin/cmake -S tests/communication \
+$HOME/Qt/Tools/CMake/bin/cmake -S tests/communication \
   -B /tmp/hostcomputer-config-tests \
-  -DCMAKE_PREFIX_PATH=/home/fire/Qt/6.12.0/gcc_64 \
+  -DCMAKE_PREFIX_PATH=$HOME/Qt/6.12.0/gcc_64 \
   -DHOST_BUILD_WIDGET_TESTS=ON
-/home/fire/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-config-tests -j 4
-/home/fire/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-config-tests --output-on-failure -j 4
+$HOME/Qt/Tools/CMake/bin/cmake --build /tmp/hostcomputer-config-tests -j 4
+$HOME/Qt/Tools/CMake/bin/ctest --test-dir /tmp/hostcomputer-config-tests --output-on-failure -j 4
 python3 -B tests/communication/configuration_reference_integration.py \
   --manager ros2_ws_car/src/robot_manager/manager.py \
   --probe /tmp/hostcomputer-config-tests/configuration_reference_probe
