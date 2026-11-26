@@ -174,6 +174,24 @@ bool TelemetryMessageCodec::validateIncomingMessage(const QJsonObject &message,
             *errorMessage = QStringLiteral("co2_data missing ppm");
             return false;
         }
+    } else if (type == QStringLiteral("co2_status")) {
+        if (!message.value(QStringLiteral("online")).isBool()) {
+            *errorCode = 2181;
+            *errorMessage = QStringLiteral("co2_status missing online");
+            return false;
+        }
+        const QJsonValue ppmValue = message.value(QStringLiteral("ppm"));
+        if (!ppmValue.isUndefined() && !ppmValue.isNull() && !ppmValue.isDouble()) {
+            *errorCode = 2182;
+            *errorMessage = QStringLiteral("co2_status invalid ppm");
+            return false;
+        }
+        const QJsonValue errValue = message.value(QStringLiteral("error"));
+        if (!errValue.isUndefined() && !errValue.isNull() && !errValue.isString()) {
+            *errorCode = 2183;
+            *errorMessage = QStringLiteral("co2_status invalid error");
+            return false;
+        }
     } else if (type == QStringLiteral("imu_data")) {
         if (!message.value(QStringLiteral("roll")).isDouble()
             || !message.value(QStringLiteral("pitch")).isDouble()

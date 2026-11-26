@@ -2,8 +2,10 @@
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QSignalSpy>
+#include <cmath>
 #include <memory>
 #include "RobotTcpClient.h"
+#include "TelemetryMessageCodec.h"
 
 using Communication::RobotTcpClient;
 
@@ -422,6 +424,49 @@ private slots:
         QTRY_VERIFY(!client.isConnected());
         QVERIFY(!client.isOperatorControlEnabled());
         QVERIFY(client.getStats().protocolErrorCount > 0);
+    }
+
+    void co2DataAndStatusTelemetryDecode()
+    {
+        QString errMsg;
+        int errCode = 0;
+        QVERIFY(!Communication::TelemetryMessageCodec::validateIncomingMessage(
+            QJsonObject{{"type", "co2_status"}, {"protocol_version", 1}}, &errMsg, &errCode));
+        QCOMPARE(errCode, 2181);
+        QVERIFY(!Communication::TelemetryMessageCodec::validateIncomingMessage(
+            QJsonObject{{"type", "co2_status"}, {"online", true}, {"ppm", "bad"}}, &errMsg, &errCode));
+        QCOMPARE(errCode, 2182);
+
+        BridgeStub bridge;
+        QVERIFY(bridge.listen());
+        RobotTcpClient client;
+        QSignalSpy co2DataSpy(&client, &RobotTcpClient::co2DataReceived);
+        QSignalSpy co2StatusSpy(&client, &RobotTcpClient::co2StatusReceived);
+
+        client.connectToROS("127.0.0.1", bridge.port());
+        QTRY_VERIFY(client.getStats().lastHeartbeatAckMs > 0);
+
+        BridgeStub::send(bridge.peers.last(), {
+            {"type", "co2_data"}, {"protocol_version", 1}, {"seq", 1}, {"timestamp_ms", 12345}, {"ppm", 480}
+        });
+        BridgeStub::send(bridge.peers.last(), {
+            {"type", "co2_status"}, {"protocol_version", 1}, {"seq", 2}, {"timestamp_ms", 12346},
+            {"online", true}, {"ppm", 480}, {"error", ""}
+        });
+        BridgeStub::send(bridge.peers.last(), {
+            {"type", "co2_status"}, {"protocol_version", 1}, {"seq", 3}, {"timestamp_ms", 12347},
+            {"online", false}, {"ppm", QJsonValue::Null}, {"error", "timeout"}
+        });
+
+        QTRY_COMPARE(co2DataSpy.count(), 1);
+        QCOMPARE(co2DataSpy.at(0).at(0).toFloat(), 480.0f);
+        QTRY_COMPARE(co2StatusSpy.count(), 2);
+        QCOMPARE(co2StatusSpy.at(0).at(0).toBool(), true);
+        QCOMPARE(co2StatusSpy.at(0).at(1).toDouble(), 480.0);
+        QCOMPARE(co2StatusSpy.at(0).at(2).toString(), QString(""));
+        QCOMPARE(co2StatusSpy.at(1).at(0).toBool(), false);
+        QVERIFY(std::isnan(co2StatusSpy.at(1).at(1).toDouble()));
+        QCOMPARE(co2StatusSpy.at(1).at(2).toString(), QString("timeout"));
     }
 };
 

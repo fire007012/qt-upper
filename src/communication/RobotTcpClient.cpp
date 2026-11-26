@@ -7,6 +7,7 @@
 #include <QMutexLocker>
 #include <QRandomGenerator>
 #include <cmath>
+#include <limits>
 
 static const QString MODULE = "RobotTcpClient";
 
@@ -1228,6 +1229,14 @@ void RobotTcpClient::processLegacyMessage(const QJsonObject &msg, qint64 receive
     } else if (msgType == "co2_data") {
         float ppm = msg["ppm"].toDouble();
         emit co2DataReceived(ppm);
+    } else if (msgType == "co2_status") {
+        const bool online = msg["online"].toBool();
+        const QJsonValue ppmVal = msg.value(QStringLiteral("ppm"));
+        const double ppm = ppmVal.isDouble()
+            ? ppmVal.toDouble()
+            : std::numeric_limits<double>::quiet_NaN();
+        const QString error = msg.value(QStringLiteral("error")).toString();
+        emit co2StatusReceived(online, ppm, error);
     } else if (msgType == "imu_data") {
         float roll = msg["roll"].toDouble();
         float pitch = msg["pitch"].toDouble();

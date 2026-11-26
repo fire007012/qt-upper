@@ -108,6 +108,7 @@ signals:
     void systemStatusReceived(const QJsonObject &status);
     void rawMessageReceived(const QByteArray &message);
     void co2DataReceived(float ppm);
+    void co2StatusReceived(bool online, double ppm, const QString &error);
     void imuDataReceived(float roll, float pitch, float yaw, float accelX, float accelY, float accelZ);
     void cameraInfoReceived(int cameraId, const QString &rtspUrl, bool online,
                             const QString &codec, int width, int height, int fps, int bitrateKbps);

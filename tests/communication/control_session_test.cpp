@@ -61,7 +61,7 @@ class ControlSessionTest : public QObject {
 private slots:
     void selectedInputSourceFiltersMotionWithoutFakingPhysicalNeutral() {
         OperatorInputState input;
-        input.keyboard.pressedKeys = {"w"};
+        input.keyboard.pressedKeys = QStringList{"w"};
         input.gamepad.connected = true;
         input.gamepad.axes.leftX = .6;
         QJsonObject payload; bool neutral = true;

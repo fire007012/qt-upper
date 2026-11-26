@@ -28,6 +28,7 @@ def main():
     parser.add_argument('--output-dir', type=Path, required=True)
     parser.add_argument('--presets', choices=('base','flippers','arm','all','base_flippers'), default='all')
     parser.add_argument('--exercise-arm', action='store_true', help='assert named goal, Servo/gripper motion and neutral stop; arm preset only')
+    parser.add_argument('--exercise-flippers', action='store_true', help='assert all four flipper joints move and return to zero velocity; flippers preset only')
     parser.add_argument('--domain-id', type=int, default=120+secrets.randbelow(100), help='isolated DDS domain (0..232), random by default')
     parser.add_argument('--hold-ms', type=int, default=500)
     parser.add_argument('--initial-emergency', action='store_true')
@@ -41,6 +42,7 @@ def main():
         parser.error('requires exactly one explicitly mock profile')
     if not 500 <= args.hold_ms <= 60000: parser.error('hold-ms must be between 500 and 60000')
     if args.exercise_arm and args.presets != 'arm': parser.error('exercise-arm requires arm preset')
+    if args.exercise_flippers and args.presets != 'flippers': parser.error('exercise-flippers requires flippers preset')
     if args.fault_unselected and args.presets != 'base': parser.error('fault-unselected requires base preset')
     selected = dict(base=['base'], flippers=['flippers'], arm=['arm'], all=['flippers','base','arm'], base_flippers=['flippers','base'])[args.presets]
     # Fault isolation needs the unselected mock axes to exist. The production
@@ -66,10 +68,13 @@ def main():
         (root / 'state/control').mkdir(parents=True)
         (root / 'state/control/emergency.json').write_text(json.dumps(dict(active=True)))
     dds_config=args.manager.resolve().parent/'config/cyclonedds.xml'
+    localhost_only='1'
     if dds_config.is_file():
         os.environ.setdefault('RMW_IMPLEMENTATION','rmw_cyclonedds_cpp')
         os.environ.setdefault('CYCLONEDDS_URI',dds_config.as_uri())
-    os.environ.update(ROS_DOMAIN_ID=str(args.domain_id), ROS_LOCALHOST_ONLY='1',
+        if os.environ.get('RMW_IMPLEMENTATION')=='rmw_cyclonedds_cpp':
+            localhost_only='0'
+    os.environ.update(ROS_DOMAIN_ID=str(args.domain_id), ROS_LOCALHOST_ONLY=localhost_only,
                       ROS_HOME=str(root / 'ros-home'), ROS_LOG_DIR=str(root / 'ros-logs'),
                       PYTHONDONTWRITEBYTECODE='1')
     sys.dont_write_bytecode = True
@@ -81,16 +86,37 @@ def main():
     from sensor_msgs.msg import JointState
     rclpy.init()
     node = Node('host_installed_mock_observer')
-    observed = dict(samples=0, wheel_motion=False, arm_motion=False, gripper_motion=False, neutral_stop=False)
+    observed = dict(samples=0, wheel_motion=False, arm_motion=False, gripper_motion=False, neutral_stop=False, flipper_motion=False, flipper_neutral_stop=False)
     arm_names={'shoulder_yaw_joint','shoulder_pitch_joint','elbow_pitch_joint','wrist_pitch_joint','wrist_yaw_joint','wrist_roll_joint'}
+    flipper_names={'left_front_arm_joint','right_front_arm_joint','left_rear_arm_joint','right_rear_arm_joint'}
     baseline={}
     stable_since=[None]
+    flipper_stable_since=[None]
     jog_started=[None]
     max_delta={}
     def joints(message):
         observed['samples'] += 1
         observed['wheel_motion'] |= any('wheel' in name and abs(v) > .01
                                        for name, v in zip(message.name, message.velocity))
+        if (root/'flipper-jog-start').exists():
+            if jog_started[0] is None:jog_started[0]=time.monotonic()
+            for name, position in zip(message.name,message.position):
+                if name in flipper_names:
+                    baseline.setdefault(name,position)
+                    max_delta[name]=max(max_delta.get(name,0),abs(position-baseline[name]))
+            observed['flipper_motion']=all(max_delta.get(n,0)>1e-4 for n in flipper_names)
+            if observed['flipper_motion'] and not (root/'flipper-motion-confirmed').exists():
+                observed['motion_latency_sec']=round(time.monotonic()-jog_started[0],3)
+                (root/'flipper-motion-confirmed').touch()
+        if (root/'flipper-neutral-start').exists():
+            import math
+            values=[abs(v) for n,v in zip(message.name,message.velocity) if n in flipper_names]
+            if len(values)==4 and all(math.isfinite(v) and v<1e-5 for v in values):
+                if flipper_stable_since[0] is None:flipper_stable_since[0]=time.monotonic()
+                if time.monotonic()-flipper_stable_since[0]>.3:
+                    observed['flipper_neutral_stop']=True
+                    if not (root/'flipper-stop-confirmed').exists():(root/'flipper-stop-confirmed').touch()
+            else:flipper_stable_since[0]=None
         if (root/'arm-jog-start').exists():
             if jog_started[0] is None:jog_started[0]=time.monotonic()
             for name, position in zip(message.name,message.position):
@@ -166,6 +192,8 @@ def main():
                        HOST_INSTALLED_HOLD_MS=str(args.hold_ms), HOST_INSTALLED_INITIAL_EMERGENCY=str(int(args.initial_emergency)), QTEST_FUNCTION_TIMEOUT='360000')
             if args.exercise_arm: env['HOST_INSTALLED_ARM_ROOT']=str(root)
             else: env.pop('HOST_INSTALLED_ARM_ROOT', None)
+            if args.exercise_flippers: env['HOST_INSTALLED_FLIPPER_ROOT']=str(root)
+            else: env.pop('HOST_INSTALLED_FLIPPER_ROOT', None)
             if args.fault_unselected: env['HOST_INSTALLED_FAULT_ROOT']=str(root)
             with (root / 'qt-probe.log').open('w') as probe_log:
                 subprocess.run([str(args.probe.resolve())], env=env, cwd=root,
@@ -176,6 +204,8 @@ def main():
                 assert observed['wheel_motion'], 'no measured wheel motion from mock hardware'
             if args.exercise_arm:
                 assert observed['arm_motion'] and observed['gripper_motion'] and observed['neutral_stop'], observed
+            if args.exercise_flippers:
+                assert observed['flipper_motion'] and observed['flipper_neutral_stop'], observed
             report['joint_max_displacement']=max_delta
             report.update(presets=selected,software_presets=software_selected,
                           hold_ms=args.hold_ms,initial_emergency=args.initial_emergency)

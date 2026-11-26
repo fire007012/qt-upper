@@ -117,6 +117,7 @@ private slots:
         QVERIFY2(!initial["preset_flow_active"].toBool(),qPrintable(QString::fromUtf8(QJsonDocument(initial).toJson())));
         QTRY_COMPARE(manager.snapshot()["runtime"].toObject()["diagnostics"].toObject()["configuration_version"].toString(),QString("group-policy-v2"));
         const QString armRoot=qEnvironmentVariable("HOST_INSTALLED_ARM_ROOT");
+        const QString flipperRoot=qEnvironmentVariable("HOST_INSTALLED_FLIPPER_ROOT");
         if (!armRoot.isEmpty()) {
             QCOMPARE(presets,QJsonArray{"arm"});
             QTest::qWait(400);
@@ -138,6 +139,18 @@ private slots:
             input={}; input.mode="arm";
             QFile neutral(armRoot+"/arm-neutral-start"); QVERIFY(neutral.open(QIODevice::WriteOnly)); neutral.write("neutral"); neutral.close();
             QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(armRoot+"/arm-stop-confirmed"),5000);
+        } else if (!flipperRoot.isEmpty()) {
+            QCOMPARE(presets,QJsonArray{"flippers"});
+            input.mode="vehicle";
+            QTest::qWait(400);
+            QTRY_VERIFY(([&]{client.authorizeOperations();return client.controlDiagnostics()["operations_authorized"].toBool();})());
+            QTRY_VERIFY(([&]{client.setOperatorControlEnabled(true);return client.isOperatorControlEnabled();})());
+            QFile marker(flipperRoot+"/flipper-jog-start"); QVERIFY(marker.open(QIODevice::WriteOnly)); marker.write("start"); marker.close();
+            input.keyboard.pressedKeys=QStringList{"y","u","i","o"};
+            QTRY_VERIFY2_WITH_TIMEOUT(QFile::exists(flipperRoot+"/flipper-motion-confirmed"), qPrintable(QString::fromUtf8(QJsonDocument(Communication::ControlProtocol::redact(client.controlDiagnostics()).toObject()).toJson())),10000);
+            input={}; input.mode="vehicle";
+            QFile neutral(flipperRoot+"/flipper-neutral-start"); QVERIFY(neutral.open(QIODevice::WriteOnly)); neutral.write("neutral"); neutral.close();
+            QTRY_VERIFY_WITH_TIMEOUT(QFile::exists(flipperRoot+"/flipper-stop-confirmed"),5000);
         } else {
             input.keyboard.pressedKeys=QStringList{"w"};
         }
